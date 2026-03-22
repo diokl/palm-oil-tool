@@ -1,0 +1,35 @@
+export const UI = {
+  APP_TITLE: '팜유 구매 의사결정 AI 도구',
+  NAV_ANALYSIS: '분석',
+  NAV_HISTORY: '히스토리',
+  NAV_COMPARE: '비교',
+
+  LABEL_CPO_CURRENT: '현재 CPO 가격 (MYR/MT)',
+  LABEL_CPO_1MONTH: '1개월 전 가격 (MYR/MT)',
+  LABEL_CPO_3MONTH: '3개월 전 가격 (MYR/MT)',
+  LABEL_INVENTORY_DAYS: '재고 커버리지 (일)',
+  LABEL_MONTHLY_USAGE: '월간 사용량 (MT)',
+  LABEL_EXCHANGE_RATE: '환율 (USD/KRW)',
+  LABEL_MARKET_ISSUES: '시장 이슈 및 특이사항',
+
+  BTN_AUTO_FETCH: '시세 자동입력',
+  BTN_ANALYZE: '분석 실행',
+  BTN_COMPARE: '선택 비교',
+  BTN_BACK: '돌아가기',
+  BTN_DELETE: '삭제',
+
+  SECTION_DECISION: '의사결정',
+  SECTION_CONFIDENCE: '확신도',
+  SECTION_REASONING: '판단 근거',
+  SECTION_TARGET_PRICE: '목표 매수가',
+  SECTION_VOLUME: '추천 물량',
+  SECTION_TIMING: '추천 시기',
+  SECTION_RISKS: '리스크',
+  SECTION_ALTERNATIVES: '대안',
+
+  MSG_LOADING: '분석 중...',
+  MSG_FETCHING: '가격 조회 중...',
+  MSG_NO_HISTORY: '분석 히스토리가 없습니다.',
+  MSG_ERROR: '오류가 발생했습니다.',
+  MSG_SELECT_COMPARE: '비교할 분석을 2개 이상 선택하세요.',
+} as const;
