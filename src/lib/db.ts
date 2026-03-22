@@ -1,55 +1,28 @@
-// Use require() for sql.js to avoid ESM/CJS issues in Next.js webpack
-const initSqlJs = require('sql.js');
-import type { Database as SqlJsDatabase } from 'sql.js';
-import fs from 'fs';
-import path from 'path';
+import { createClient, type Client, type InArgs } from '@libsql/client';
 
-// Vercel serverless: filesystem is read-only except /tmp
-const isVercel = process.env.VERCEL === '1';
-const SOURCE_DB_PATH = path.join(process.cwd(), 'data', 'palm-oil-manager.db');
-const DB_PATH = isVercel
-  ? path.join('/tmp', 'palm-oil-manager.db')
-  : SOURCE_DB_PATH;
+const TURSO_URL = process.env.TURSO_DATABASE_URL || '';
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN || '';
 
-let db: SqlJsDatabase | null = null;
-let initPromise: Promise<SqlJsDatabase> | null = null;
+let client: Client | null = null;
 
-async function initDb(): Promise<SqlJsDatabase> {
-  // Provide explicit WASM path for production builds
-  const wasmPath = path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
-  const wasmBinary = fs.readFileSync(wasmPath);
-  const SQL = await initSqlJs({ wasmBinary });
-
-  // On Vercel: copy bundled DB to /tmp on cold start
-  if (isVercel && !fs.existsSync(DB_PATH) && fs.existsSync(SOURCE_DB_PATH)) {
-    fs.copyFileSync(SOURCE_DB_PATH, DB_PATH);
+function getClient(): Client {
+  if (!client) {
+    if (!TURSO_URL) {
+      throw new Error('TURSO_DATABASE_URL environment variable is not set');
+    }
+    client = createClient({
+      url: TURSO_URL,
+      authToken: TURSO_TOKEN,
+    });
   }
-
-  let database: SqlJsDatabase;
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH);
-    database = new SQL.Database(buffer);
-  } else {
-    // Ensure data directory exists
-    const dir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    database = new SQL.Database();
-  }
-
-  // Initialize pragmas
-  database.run('PRAGMA journal_mode = WAL');
-  database.run('PRAGMA foreign_keys = ON');
-
-  // Initialize schema
-  initializeDbSchema(database);
-
-  saveDb(database);
-  return database;
+  return client;
 }
 
-function initializeDbSchema(database: SqlJsDatabase) {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS fcpo_settlement (
+async function initializeDbSchema() {
+  const db = getClient();
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS fcpo_settlement (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       date TEXT NOT NULL,
       contract_month TEXT NOT NULL,
@@ -59,9 +32,8 @@ function initializeDbSchema(database: SqlJsDatabase) {
       source TEXT DEFAULT 'manual',
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(date, contract_month)
-    );
-
-    CREATE TABLE IF NOT EXISTS inventory (
+    )`,
+    `CREATE TABLE IF NOT EXISTS inventory (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       product TEXT NOT NULL CHECK(product IN ('RBD', 'RSPO')),
       year INTEGER NOT NULL,
@@ -75,9 +47,8 @@ function initializeDbSchema(database: SqlJsDatabase) {
       updated_at TEXT DEFAULT (datetime('now')),
       updated_by TEXT,
       UNIQUE(product, year, month)
-    );
-
-    CREATE TABLE IF NOT EXISTS purchases (
+    )`,
+    `CREATE TABLE IF NOT EXISTS purchases (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       shipment_month TEXT NOT NULL,
       contract_date TEXT,
@@ -91,9 +62,8 @@ function initializeDbSchema(database: SqlJsDatabase) {
       product TEXT DEFAULT 'RBD',
       notes TEXT,
       created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS news (
+    )`,
+    `CREATE TABLE IF NOT EXISTS news (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       date TEXT NOT NULL,
       content TEXT NOT NULL,
@@ -101,18 +71,16 @@ function initializeDbSchema(database: SqlJsDatabase) {
       impact TEXT CHECK(impact IN ('High', 'Medium', 'Low')),
       created_at TEXT DEFAULT (datetime('now')),
       created_by TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS analyses (
+    )`,
+    `CREATE TABLE IF NOT EXISTS analyses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       analysis_type TEXT DEFAULT 'market',
       input_data TEXT,
       result TEXT,
       model TEXT,
       created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS alerts (
+    )`,
+    `CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       product TEXT NOT NULL,
       alert_level TEXT NOT NULL CHECK(alert_level IN ('critical', 'warning', 'normal')),
@@ -125,9 +93,8 @@ function initializeDbSchema(database: SqlJsDatabase) {
       action_taken TEXT,
       is_active INTEGER DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS edit_log (
+    )`,
+    `CREATE TABLE IF NOT EXISTS edit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       table_name TEXT NOT NULL,
       record_id INTEGER,
@@ -136,85 +103,82 @@ function initializeDbSchema(database: SqlJsDatabase) {
       new_value TEXT,
       edited_by TEXT,
       edited_at TEXT DEFAULT (datetime('now'))
-    );
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_fcpo_date ON fcpo_settlement(date)`,
+    `CREATE INDEX IF NOT EXISTS idx_fcpo_month ON fcpo_settlement(contract_month)`,
+    `CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory(product, year, month)`,
+    `CREATE INDEX IF NOT EXISTS idx_news_date ON news(date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(is_active, created_at DESC)`,
+  ];
 
-    CREATE INDEX IF NOT EXISTS idx_fcpo_date ON fcpo_settlement(date);
-    CREATE INDEX IF NOT EXISTS idx_fcpo_month ON fcpo_settlement(contract_month);
-    CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory(product, year, month);
-    CREATE INDEX IF NOT EXISTS idx_news_date ON news(date DESC);
-    CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(is_active, created_at DESC);
-  `);
+  await db.batch(statements.map(sql => ({ sql, args: [] })));
 }
 
-function saveDb(database: SqlJsDatabase) {
-  const data = database.export();
-  const buffer = Buffer.from(data);
-  const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(DB_PATH, buffer);
-}
+let schemaInitialized = false;
+let schemaPromise: Promise<void> | null = null;
 
-export async function getDb(): Promise<SqlJsDatabase> {
-  if (db) return db;
-  if (!initPromise) {
-    initPromise = initDb().then(database => {
-      db = database;
-      return database;
+async function ensureSchema() {
+  if (schemaInitialized) return;
+  if (!schemaPromise) {
+    schemaPromise = initializeDbSchema().then(() => {
+      schemaInitialized = true;
     });
   }
-  return initPromise;
+  return schemaPromise;
+}
+
+// Keep getDb for backward compatibility (returns the client)
+export async function getDb(): Promise<Client> {
+  await ensureSchema();
+  return getClient();
 }
 
 // Helper: run SQL with params (INSERT/UPDATE/DELETE)
 export async function dbRun(sql: string, params: any[] = []) {
-  const database = await getDb();
-  database.run(sql, params);
-  saveDb(database);
+  await ensureSchema();
+  const db = getClient();
+  await db.execute({ sql, args: params as InArgs });
 }
 
 // Helper: get single row
 export async function dbGet(sql: string, params: any[] = []): Promise<any | undefined> {
-  const database = await getDb();
-  const stmt = database.prepare(sql);
-  stmt.bind(params);
-  if (stmt.step()) {
-    const columns = stmt.getColumnNames();
-    const values = stmt.get();
-    stmt.free();
-    const row: any = {};
-    columns.forEach((col, i) => {
-      row[col] = values[i];
-    });
-    return row;
+  await ensureSchema();
+  const db = getClient();
+  const result = await db.execute({ sql, args: params as InArgs });
+  if (result.rows.length === 0) return undefined;
+  // Convert Row to plain object
+  const row = result.rows[0];
+  const obj: any = {};
+  for (const col of result.columns) {
+    obj[col] = row[col];
   }
-  stmt.free();
-  return undefined;
+  return obj;
 }
 
 // Helper: get all rows
 export async function dbAll(sql: string, params: any[] = []): Promise<any[]> {
-  const database = await getDb();
-  const stmt = database.prepare(sql);
-  stmt.bind(params);
-  const rows: any[] = [];
-  while (stmt.step()) {
-    const columns = stmt.getColumnNames();
-    const values = stmt.get();
-    const row: any = {};
-    columns.forEach((col, i) => {
-      row[col] = values[i];
-    });
-    rows.push(row);
-  }
-  stmt.free();
-  return rows;
+  await ensureSchema();
+  const db = getClient();
+  const result = await db.execute({ sql, args: params as InArgs });
+  return result.rows.map(row => {
+    const obj: any = {};
+    for (const col of result.columns) {
+      obj[col] = row[col];
+    }
+    return obj;
+  });
 }
 
-// Helper: execute multiple statements
+// Helper: execute multiple statements (split by semicolon)
 export async function dbExec(sql: string) {
-  const database = await getDb();
-  database.exec(sql);
-  saveDb(database);
+  await ensureSchema();
+  const db = getClient();
+  const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
+  if (statements.length === 1) {
+    await db.execute(statements[0]);
+  } else {
+    await db.batch(statements.map(s => ({ sql: s, args: [] })));
+  }
 }
 
 // Helper: get last insert rowid
@@ -223,11 +187,9 @@ export async function dbLastId(): Promise<number> {
   return row?.id ?? 0;
 }
 
-// Helper: batch run without saving between each (save once at end)
+// Helper: batch run without saving between each
 export async function dbBatchRun(operations: { sql: string; params: any[] }[]) {
-  const database = await getDb();
-  for (const op of operations) {
-    database.run(op.sql, op.params);
-  }
-  saveDb(database);
+  await ensureSchema();
+  const db = getClient();
+  await db.batch(operations.map(op => ({ sql: op.sql, args: op.params as InArgs })));
 }

@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbAll, dbRun, dbGet, dbLastId, getDb } from '@/lib/db';
+import { dbAll, dbRun, dbGet, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 
 // Ensure extended columns exist (migration-safe)
 async function ensureExtendedColumns() {
-  const database = await getDb();
-  const tableInfo = database.exec("PRAGMA table_info(purchases)");
+  const tableInfo = await dbAll("PRAGMA table_info(purchases)");
   if (tableInfo.length > 0) {
-    const columns = tableInfo[0].values.map((row: any) => row[1]);
+    const columns = tableInfo.map((row: any) => row.name);
     const newCols: [string, string][] = [
       ['incoterms', 'TEXT'],
       ['payment_terms', 'TEXT'],
@@ -17,7 +16,9 @@ async function ensureExtendedColumns() {
     ];
     for (const [col, type] of newCols) {
       if (!columns.includes(col)) {
-        database.run(`ALTER TABLE purchases ADD COLUMN ${col} ${type}`);
+        try {
+          await dbRun(`ALTER TABLE purchases ADD COLUMN ${col} ${type}`);
+        } catch { /* column may already exist */ }
       }
     }
   }

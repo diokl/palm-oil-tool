@@ -20,8 +20,8 @@
     "pdf-parse": "^2.4.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "@libsql/client": "^0.14.0",
     "recharts": "^3.8.0",
-    "sql.js": "^1.14.1",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },
@@ -31,7 +31,6 @@
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@types/sql.js": "^1.4.10",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.1.6",
     "tailwindcss": "^4.2.1",
