@@ -499,7 +499,7 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
     return (
       <div className="space-y-6 animate-fade-in">
         <Shimmer className="h-20" />
-        <div className="grid grid-cols-4 gap-4">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-28" />)}</div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-28" />)}</div>
         <Shimmer className="h-80" />
       </div>
     );
@@ -519,7 +519,7 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
       ))}
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         <MetricCard label="FCPO 근월물 (USD)" value={formatPrice(latestFCPO?.settlement_usd)} unit={`기준일: ${data.fcpo_latest_date || '-'}`} />
         <MetricCard
           label="박스권 위치"
@@ -536,11 +536,11 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
       </div>
 
       {/* Main Grid */}
-      <div className="grid grid-cols-5 gap-6">
-        <div className="col-span-3">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 md:gap-6">
+        <div className="lg:col-span-3">
           {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
         </div>
-        <div className="col-span-2 space-y-5">
+        <div className="lg:col-span-2 space-y-5">
           {/* AI Analysis */}
           <div className="card p-5">
             <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
@@ -666,7 +666,7 @@ const FCPOTab = () => {
         {showAddForm && (
           <div className="mb-4 p-4 bg-blue-50/50 rounded-xl border border-blue-100 space-y-3 animate-fade-in">
             <p className="text-sm font-semibold text-slate-700">FCPO 가격 수동 입력</p>
-            <div className="grid grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <div>
                 <label className="text-xs text-slate-500 mb-1 block">날짜 *</label>
                 <input
@@ -1281,7 +1281,7 @@ const PurchasesTab = () => {
     <div className="space-y-5 animate-fade-in">
       {/* Summary */}
       {summary && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
           <MetricCard label="총 구매 건수" value={formatNumber(summary.total)} />
           <MetricCard label="성공 거래" value={`${summary.successful}건`} unit={`성공률 ${summary.success_rate}`} />
           <MetricCard label="평균 절감가" value={formatPrice(Math.abs(summary.avg_diff))} accent="text-emerald-600" />
@@ -1323,7 +1323,7 @@ const PurchasesTab = () => {
           </div>
 
           {/* Row 1: Core fields */}
-          <div className="grid grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <div>
               <label className="text-xs text-slate-500 mb-1 block">상품 *</label>
               <select value={form.product} onChange={(e) => setField('product', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
@@ -1357,7 +1357,7 @@ const PurchasesTab = () => {
           </div>
 
           {/* Row 2: Detail fields */}
-          <div className="grid grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <div>
               <label className="text-xs text-slate-500 mb-1 block">공급사</label>
               <input type="text" value={form.supplier} onChange={(e) => setField('supplier', e.target.value)} placeholder="Wilmar" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
@@ -1485,7 +1485,7 @@ const PurchasesTab = () => {
                       {isExpanded && (
                         <tr className="bg-slate-50/50">
                           <td colSpan={11} className="px-4 py-3">
-                            <div className="grid grid-cols-6 gap-4 text-xs">
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-xs">
                               <div>
                                 <span className="text-slate-400 block">계약번호</span>
                                 <span className="text-slate-700 font-medium">{p.contract_number || '-'}</span>
@@ -1591,7 +1591,7 @@ const NewsTab = () => {
     <div className="space-y-6 animate-fade-in">
       {/* Header with Add Button */}
       <div className="flex items-center justify-between">
-        <div className="grid grid-cols-3 gap-4 flex-1 mr-4">
+        <div className="grid grid-cols-3 gap-2 md:gap-4 flex-1 mr-4">
           <div className="card p-4 bg-emerald-50/50 border-emerald-200/50">
             <p className="text-emerald-600 text-xs font-medium mb-1">강세</p>
             <p className="text-2xl font-bold text-emerald-600 tabular-nums">{sentimentCounts.강세}</p>
@@ -1619,7 +1619,7 @@ const NewsTab = () => {
       {showAddForm && (
         <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-3 animate-fade-in">
           <p className="text-sm font-semibold text-slate-700">시황/뉴스 수동 입력</p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="text-xs text-slate-500 mb-1 block">날짜</label>
               <input
@@ -1748,6 +1748,7 @@ export default function Home() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
@@ -1782,8 +1783,13 @@ export default function Home() {
 
   return (
     <div className="flex h-screen bg-slate-100">
+      {/* Mobile Sidebar Overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* SIDEBAR */}
-      <aside className="w-60 bg-white border-r border-slate-200 flex flex-col shadow-sm">
+      <aside className={`fixed inset-y-0 left-0 z-50 w-60 bg-white border-r border-slate-200 flex flex-col shadow-sm transform transition-transform duration-200 lg:relative lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {/* Logo */}
         <div className="px-5 py-5 border-b border-slate-100">
           <div className="flex items-center gap-3">
@@ -1802,7 +1808,7 @@ export default function Home() {
           {navItems.map((item) => (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 ${
                 activeTab === item.id
                   ? 'bg-blue-50 text-blue-700'
@@ -1851,10 +1857,20 @@ export default function Home() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-auto">
-        <div className="p-6 max-w-7xl">
+      <main className="flex-1 overflow-auto min-w-0">
+        <div className="p-3 md:p-6 max-w-7xl">
           {/* Header */}
-          <div className="mb-6 flex items-center justify-between">
+          <div className="mb-4 md:mb-6 flex items-center justify-between">
+            {/* Mobile hamburger */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="lg:hidden mr-3 p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+              aria-label="메뉴 열기"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
             <div>
               <h2 className="text-xl font-bold text-slate-800">
                 {navItems.find((item) => item.id === activeTab)?.label}

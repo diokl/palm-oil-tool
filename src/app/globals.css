@@ -80,3 +80,16 @@ input:focus, select:focus, textarea:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
 }
+
+/* Mobile responsive */
+@media (max-width: 1023px) {
+  /* Card border radius smaller on mobile */
+  .card { border-radius: 12px; }
+
+  /* Ensure tables scroll horizontally on mobile */
+  table { font-size: 0.8125rem; }
+  th, td { padding: 8px 10px !important; white-space: nowrap; }
+
+  /* MetricCard value text slightly smaller */
+  .metric-value { font-size: 1.25rem; }
+}
