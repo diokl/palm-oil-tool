@@ -58,10 +58,21 @@ ${JSON.stringify(alerts, null, 2)}
 {
   "market_summary": "현재 시장 상황 요약 (2-3문장)",
   "buy_recommendation": "구매 관점 의견 (2-3문장)",
+  "monthly_strategy": [
+    {"month": "2026-04", "action": "전량구매/적극매수/모니터링/대기 중 하나", "target_price": 목표단가숫자, "volume_mt": 권장물량숫자, "reason": "이유 1문장"},
+    {"month": "2026-05", "action": "...", "target_price": 숫자, "volume_mt": 숫자, "reason": "..."},
+    {"month": "2026-06", "action": "...", "target_price": 숫자, "volume_mt": 숫자, "reason": "..."}
+  ],
   "risk_factors": ["리스크 요인 1", "리스크 요인 2"],
   "action_items": ["조치사항 1", "조치사항 2"],
   "outlook": "단기/중기 전망 (1-2문장)"
-}`;
+}
+
+monthly_strategy의 각 월에 대해:
+- action: 현재 시장 상황과 재고를 고려한 구매 전략
+- target_price: 해당 월물의 매수 목표가 (USD/MT)
+- volume_mt: 권장 구매 물량 (재고 소진 예상일 등 고려)
+- reason: 그 전략을 추천하는 구체적 근거`;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -69,6 +80,11 @@ ${JSON.stringify(alerts, null, 2)}
       const mockResult = {
         market_summary: "현재 팜유 시장은 단기 약세 국면입니다. 말레이시아 재고 부담과 인도 수입관세 이슈가 하방 압력을 가하고 있으나, 인도네시아 B50 시행 기대가 하단을 지지하고 있습니다.",
         buy_recommendation: "현재가가 박스권 전량구매 구간에 위치하고 있어 매수 적기로 판단됩니다. RBD 8월 재고 소진이 예상되므로 5월 선적물 확보가 시급합니다.",
+        monthly_strategy: [
+          { month: "2026-04", action: "전량구매", target_price: 1070, volume_mt: 2600, reason: "박스권 하단 구간, 재고 소진 임박" },
+          { month: "2026-05", action: "적극매수", target_price: 1080, volume_mt: 2000, reason: "B50 시행 전 선제적 물량 확보 필요" },
+          { month: "2026-06", action: "모니터링", target_price: 1050, volume_mt: 1000, reason: "B50 시행에 따른 가격 변동성 관찰 후 결정" },
+        ],
         risk_factors: ["인도 수입관세 인상 시 수요 감소 가능", "말레이시아 재고 추가 증가 시 하방 압력"],
         action_items: ["5월 선적물 RBD 2,600톤 전량구매 검토", "RSPO 4월 선적물 400톤 추가 확보"],
         outlook: "단기 약세 지속 전망이나 B50 시행(6월)을 앞두고 중기적으로 반등 가능성 있음."

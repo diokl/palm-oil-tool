@@ -486,6 +486,28 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
 
 const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: boolean }) => {
   const [boxDetail, setBoxDetail] = useState<BoxRangeDetail | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    setAnalysisError('');
+    try {
+      const res = await fetch('/api/analyze', { method: 'POST' });
+      const json = await res.json();
+      if (json.error) {
+        setAnalysisError(json.error);
+      } else {
+        setAnalysisResult(json);
+      }
+    } catch (err) {
+      console.error('Analysis failed:', err);
+      setAnalysisError('분석 중 오류가 발생했습니다.');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   useEffect(() => {
     if (data?.box_ranges?.[0]?.contract_month) {
@@ -544,19 +566,111 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
         <div className="lg:col-span-2 space-y-5">
           {/* AI Analysis */}
           <div className="card p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-              <span className="w-2 h-2 bg-blue-500 rounded-full" />
-              AI 시황 분석
-            </h3>
-            {data.ai_analysis ? (
-              <p className="text-sm text-slate-600 leading-relaxed">{typeof data.ai_analysis === 'object' ? JSON.stringify(data.ai_analysis) : data.ai_analysis}</p>
-            ) : (
-              <div className="text-sm text-slate-500">
-                <p className="mb-3">뉴스/시황 데이터를 입력한 후 AI 분석을 실행하세요.</p>
-                <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors shadow-sm">
-                  분석 실행
-                </button>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <span className="w-2 h-2 bg-blue-500 rounded-full" />
+                AI 시황 분석
+              </h3>
+              <button
+                onClick={handleAnalyze}
+                disabled={analyzing}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm flex items-center gap-1.5"
+              >
+                {analyzing && <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>}
+                {analyzing ? '분석 중...' : '분석 실행'}
+              </button>
+            </div>
+
+            {analysisError && (
+              <div className="text-xs text-rose-500 bg-rose-50 rounded-lg p-2 mb-3">{analysisError}</div>
+            )}
+
+            {analysisResult ? (
+              <div className="space-y-4 animate-fade-in">
+                {/* Market Summary */}
+                <div>
+                  <p className="text-xs font-medium text-slate-500 mb-1">시장 현황</p>
+                  <p className="text-sm text-slate-700 leading-relaxed">{analysisResult.market_summary}</p>
+                </div>
+
+                {/* Buy Recommendation */}
+                <div className="bg-blue-50 rounded-lg p-3">
+                  <p className="text-xs font-medium text-blue-600 mb-1">구매 의견</p>
+                  <p className="text-sm text-blue-800 leading-relaxed">{analysisResult.buy_recommendation}</p>
+                </div>
+
+                {/* Monthly Strategy Table */}
+                {analysisResult.monthly_strategy && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-500 mb-2">월별 구매 전략</p>
+                    <div className="space-y-2">
+                      {analysisResult.monthly_strategy.map((m: any, i: number) => (
+                        <div key={i} className={`rounded-lg p-3 border text-sm ${
+                          m.action === '전량구매' ? 'bg-emerald-50 border-emerald-200' :
+                          m.action === '적극매수' ? 'bg-blue-50 border-blue-200' :
+                          m.action === '모니터링' ? 'bg-amber-50 border-amber-200' :
+                          'bg-slate-50 border-slate-200'
+                        }`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-semibold text-slate-700">{m.month}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                              m.action === '전량구매' ? 'bg-emerald-100 text-emerald-700' :
+                              m.action === '적극매수' ? 'bg-blue-100 text-blue-700' :
+                              m.action === '모니터링' ? 'bg-amber-100 text-amber-700' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>{m.action}</span>
+                          </div>
+                          <div className="flex items-center gap-4 text-xs text-slate-500">
+                            <span>목표가: <b className="text-slate-700">${m.target_price}/MT</b></span>
+                            <span>물량: <b className="text-slate-700">{m.volume_mt?.toLocaleString()}톤</b></span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1">{m.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Risk Factors */}
+                {analysisResult.risk_factors && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-500 mb-1">리스크 요인</p>
+                    <ul className="text-xs text-slate-600 space-y-1">
+                      {analysisResult.risk_factors.map((r: string, i: number) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="text-rose-400 mt-0.5">⚠</span>
+                          <span>{r}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Action Items */}
+                {analysisResult.action_items && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-500 mb-1">조치사항</p>
+                    <ul className="text-xs text-slate-600 space-y-1">
+                      {analysisResult.action_items.map((a: string, i: number) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="text-blue-400 mt-0.5">→</span>
+                          <span>{a}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Outlook */}
+                {analysisResult.outlook && (
+                  <div className="bg-slate-50 rounded-lg p-3">
+                    <p className="text-xs font-medium text-slate-500 mb-1">전망</p>
+                    <p className="text-sm text-slate-600">{analysisResult.outlook}</p>
+                  </div>
+                )}
               </div>
+            ) : !analyzing && (
+              <p className="text-sm text-slate-400">상단의 &quot;분석 실행&quot; 버튼을 눌러 AI 시황 분석을 시작하세요.</p>
             )}
           </div>
 
