@@ -2,9 +2,38 @@ import { NextRequest, NextResponse } from 'next/server';
 
 async function parsePdf(buffer: Buffer): Promise<string> {
   const mod = await import('pdf-parse');
+
+  // pdf-parse v1 style: default export is a function
+  if (typeof (mod as any).default === 'function') {
+    const pdfParse = (mod as any).default;
+    const data = await pdfParse(buffer);
+    return data.text;
+  }
+
+  // pdf-parse v2 style: PDFParse class
+  if ((mod as any).PDFParse) {
+    const { PDFParse } = mod as any;
+    const uint8 = new Uint8Array(buffer);
+    const pdf = new PDFParse(uint8);
+    await pdf.load();
+    const result = await pdf.getText();
+    const text = typeof result === 'string' ? result : (result?.text || '');
+    pdf.destroy();
+    // If page-based, concat page texts
+    if (!text && result?.pages) {
+      let allText = '';
+      for (let i = 1; i <= (result.total || 0); i++) {
+        try { allText += await pdf.getPageText(i) + '\n'; } catch {}
+      }
+      return allText;
+    }
+    return text;
+  }
+
+  // Fallback: try calling the module itself
   const pdfParse = (mod as any).default || mod;
   const data = await pdfParse(buffer);
-  return data.text;
+  return data.text || '';
 }
 
 // 월물 이름을 YYYY-MM 형식으로 변환
