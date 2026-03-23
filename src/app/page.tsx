@@ -708,6 +708,13 @@ const FCPOTab = () => {
   const [newPrice, setNewPrice] = useState({ date: '', contract_month: '', settlement_usd: '', settlement_myr: '', exchange_rate: '' });
   const [saving, setSaving] = useState(false);
 
+  // BMD PDF upload state
+  const [bmdUploading, setBmdUploading] = useState(false);
+  const [bmdResult, setBmdResult] = useState<any>(null);
+  const [bmdSaving, setBmdSaving] = useState(false);
+  const [bmdMessage, setBmdMessage] = useState('');
+  const bmdFileRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => { fetchFCPOData(); }, []);
 
   const fetchFCPOData = async () => {
@@ -725,6 +732,86 @@ const FCPOTab = () => {
       console.error('Failed to fetch FCPO data:', error);
     } finally {
       setLocalLoading(false);
+    }
+  };
+
+  // BMD PDF 업로드 핸들러
+  const handleBmdUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBmdUploading(true);
+    setBmdResult(null);
+    setBmdMessage('');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/bmd/parse-pdf', { method: 'POST', body: formData });
+      const json = await res.json();
+      if (json.success) {
+        setBmdResult(json);
+        setBmdMessage(`${json.report_date} BMD 데이터: RBD Palm Oil ${json.rbd_palm_oil?.length || 0}건, FCPO ${json.fcpo_usd?.length || 0}건`);
+      } else {
+        setBmdMessage(`파싱 실패: ${json.error || '알 수 없는 오류'}`);
+      }
+    } catch (error) {
+      setBmdMessage('PDF 업로드 중 오류 발생');
+    } finally {
+      setBmdUploading(false);
+      if (bmdFileRef.current) bmdFileRef.current.value = '';
+    }
+  };
+
+  // BMD 데이터를 FCPO 테이블에 저장
+  const handleBmdSave = async () => {
+    if (!bmdResult) return;
+    setBmdSaving(true);
+    try {
+      const date = bmdResult.report_date;
+      const exchangeRate = bmdResult.exchange_rate;
+      let saved = 0;
+
+      // RBD Palm Oil ASK 가격을 fcpo_settlement에 저장
+      for (const item of (bmdResult.rbd_palm_oil || [])) {
+        await fetch('/api/fcpo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date,
+            contract_month: item.contract_month,
+            settlement_usd: item.ask,
+            settlement_myr: exchangeRate ? Math.round(item.ask * exchangeRate * 100) / 100 : null,
+            exchange_rate: exchangeRate,
+            source: 'bmd_pdf_rbd',
+          }),
+        });
+        saved++;
+      }
+
+      // FCPO USD 가격도 저장 (별도 소스 태그)
+      for (const item of (bmdResult.fcpo_usd || [])) {
+        await fetch('/api/fcpo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date,
+            contract_month: item.contract_month,
+            settlement_usd: item.last_done_trade,
+            settlement_myr: exchangeRate ? Math.round(item.last_done_trade * exchangeRate * 100) / 100 : null,
+            exchange_rate: exchangeRate,
+            source: 'bmd_pdf_fcpo',
+          }),
+        });
+        saved++;
+      }
+
+      setBmdMessage(`${saved}건 저장 완료`);
+      setBmdResult(null);
+      fetchFCPOData();
+      setTimeout(() => setBmdMessage(''), 3000);
+    } catch (error) {
+      setBmdMessage('저장 중 오류 발생');
+    } finally {
+      setBmdSaving(false);
     }
   };
 
@@ -762,14 +849,25 @@ const FCPOTab = () => {
       <div className="card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold text-slate-800">FCPO 가격 추이</h2>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <div className="relative">
+              <input ref={bmdFileRef} type="file" accept=".pdf" onChange={handleBmdUpload} className="hidden" />
+              <button
+                onClick={() => bmdFileRef.current?.click()}
+                disabled={bmdUploading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                {bmdUploading ? 'BMD PDF 분석 중...' : 'BMD PDF 업로드'}
+              </button>
+            </div>
             <button
               onClick={() => setShowAddForm(!showAddForm)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
                 showAddForm ? 'bg-slate-200 text-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'
               }`}
             >
-              {showAddForm ? '취소' : '+ 가격 입력'}
+              {showAddForm ? '취소' : '+ 수동 입력'}
             </button>
             <button onClick={fetchFCPOData} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors">
               새로고침
@@ -843,6 +941,80 @@ const FCPOTab = () => {
                 {saving ? '저장 중...' : '저장'}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* BMD PDF 파싱 결과 미리보기 */}
+        {bmdMessage && !bmdResult && (
+          <div className={`text-xs px-3 py-2 rounded-lg ${bmdMessage.includes('실패') || bmdMessage.includes('오류') ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-700'}`}>
+            {bmdMessage}
+          </div>
+        )}
+
+        {bmdResult && (
+          <div className="card p-4 border-blue-200 bg-blue-50/30 space-y-3 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">BMD PDF 파싱 결과</p>
+                <p className="text-xs text-slate-500">날짜: {bmdResult.report_date} · 환율: {bmdResult.exchange_rate} MYR/USD</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleBmdSave} disabled={bmdSaving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1.5">
+                  {bmdSaving && <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>}
+                  FCPO 테이블에 저장
+                </button>
+                <button onClick={() => { setBmdResult(null); setBmdMessage(''); }}
+                  className="px-3 py-2 bg-slate-200 text-slate-600 rounded-lg text-xs font-medium hover:bg-slate-300">
+                  취소
+                </button>
+              </div>
+            </div>
+
+            {/* RBD Palm Oil */}
+            {bmdResult.rbd_palm_oil?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-blue-700 mb-1">RBD PALM OIL (USD/MT) — ASK</p>
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                  {bmdResult.rbd_palm_oil.map((item: any, i: number) => (
+                    <div key={i} className="bg-white rounded-lg p-2 border border-blue-200 text-center">
+                      <p className="text-[10px] text-slate-500">{item.contract_month}</p>
+                      <p className="text-sm font-bold text-blue-800">${item.ask}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* FCPO USD */}
+            {bmdResult.fcpo_usd?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-emerald-700 mb-1">FCPO (USD/MT) — Last Done Trade</p>
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                  {bmdResult.fcpo_usd.map((item: any, i: number) => (
+                    <div key={i} className="bg-white rounded-lg p-2 border border-emerald-200 text-center">
+                      <p className="text-[10px] text-slate-500">{item.contract_month}</p>
+                      <p className="text-sm font-bold text-emerald-800">${item.last_done_trade}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* RBD Palm Olein */}
+            {bmdResult.rbd_palm_olein?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-amber-700 mb-1">RBD PALM OLEIN (USD/MT) — ASK</p>
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                  {bmdResult.rbd_palm_olein.map((item: any, i: number) => (
+                    <div key={i} className="bg-white rounded-lg p-2 border border-amber-200 text-center">
+                      <p className="text-[10px] text-slate-500">{item.contract_month}</p>
+                      <p className="text-sm font-bold text-amber-800">${item.ask}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
