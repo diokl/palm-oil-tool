@@ -1543,6 +1543,10 @@ const NewsTab = () => {
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkResults, setBulkResults] = useState<any[] | null>(null);
 
+  // Detail/Delete
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+
   useEffect(() => { fetchNews(); }, []);
 
   const fetchNews = async () => {
@@ -1556,6 +1560,17 @@ const NewsTab = () => {
       console.error('Failed to fetch news:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteNews = async (id: number) => {
+    try {
+      await fetch(`/api/news?id=${id}`, { method: 'DELETE' });
+      setDeleteConfirm(null);
+      setExpandedId(null);
+      fetchNews();
+    } catch (error) {
+      console.error('Failed to delete news:', error);
     }
   };
 
@@ -1813,17 +1828,126 @@ const NewsTab = () => {
         </div>
       )}
 
-      {/* News Grid */}
+      {/* News List — 날짜별 그룹핑 */}
       {loading ? (
-        <div className="grid grid-cols-2 gap-4">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-32" />)}</div>
+        <div className="space-y-3">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-20" />)}</div>
       ) : newsData.length === 0 ? (
         <div className="card p-8 text-center">
           <p className="text-slate-500 text-sm">등록된 뉴스가 없습니다</p>
           <p className="text-slate-400 text-xs mt-1">상단의 &quot;+ 뉴스 입력&quot; 버튼으로 시황 데이터를 추가하세요</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4">
-          {newsData.map((news) => <NewsCard key={news.id} news={news} />)}
+        <div className="space-y-4">
+          {(() => {
+            // 날짜별 그룹핑
+            const grouped: Record<string, NewsItem[]> = {};
+            newsData.forEach(n => {
+              const d = n.date || 'unknown';
+              if (!grouped[d]) grouped[d] = [];
+              grouped[d].push(n);
+            });
+            const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
+
+            return sortedDates.map(dateKey => {
+              const items = grouped[dateKey];
+              const dateLabel = dateKey !== 'unknown'
+                ? new Date(dateKey + 'T00:00:00').toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
+                : '날짜 미지정';
+
+              return (
+                <div key={dateKey}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="h-px flex-1 bg-slate-200" />
+                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">{dateLabel}</span>
+                    <span className="text-xs text-slate-400">{items.length}건</span>
+                    <div className="h-px flex-1 bg-slate-200" />
+                  </div>
+                  <div className="space-y-2">
+                    {items.map(news => {
+                      const isExpanded = expandedId === news.id;
+                      const sentimentColors: Record<string, string> = {
+                        '강세': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                        '약세': 'bg-rose-50 text-rose-700 border-rose-200',
+                        '보합': 'bg-slate-50 text-slate-600 border-slate-200',
+                      };
+                      const sStyle = sentimentColors[news.sentiment] || sentimentColors['보합'];
+
+                      return (
+                        <div key={news.id} className={`card overflow-hidden transition-all ${isExpanded ? 'ring-2 ring-blue-200' : ''}`}>
+                          {/* 요약 행 — 클릭 시 확장 */}
+                          <div
+                            className="p-3.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50/50 transition-colors"
+                            onClick={() => setExpandedId(isExpanded ? null : news.id)}
+                          >
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${sStyle}`}>
+                              {news.sentiment}
+                            </span>
+                            <p className={`text-sm text-slate-700 flex-1 ${isExpanded ? '' : 'line-clamp-1'}`}>
+                              {news.content}
+                            </p>
+                            <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${
+                              news.impact === 'High' ? 'bg-rose-50 text-rose-600' :
+                              news.impact === 'Medium' ? 'bg-amber-50 text-amber-600' : 'bg-slate-50 text-slate-500'
+                            }`}>
+                              {news.impact}
+                            </span>
+                            <svg className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
+
+                          {/* 확장 상세 보기 */}
+                          {isExpanded && (
+                            <div className="border-t border-slate-100 bg-slate-50/30 p-4 space-y-3 animate-fade-in">
+                              <div>
+                                <p className="text-xs font-medium text-slate-500 mb-1">전체 내용</p>
+                                <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{news.content}</p>
+                              </div>
+                              <div className="grid grid-cols-3 gap-3">
+                                <div>
+                                  <p className="text-xs text-slate-400 mb-0.5">시황 전망</p>
+                                  <span className={`text-sm font-semibold px-2.5 py-1 rounded-lg border inline-block ${sStyle}`}>
+                                    {news.sentiment}
+                                  </span>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-slate-400 mb-0.5">영향도</p>
+                                  <span className={`text-sm font-medium px-2.5 py-1 rounded-lg inline-block ${
+                                    news.impact === 'High' ? 'bg-rose-100 text-rose-700' :
+                                    news.impact === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'
+                                  }`}>{news.impact}</span>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-slate-400 mb-0.5">작성자</p>
+                                  <span className="text-sm text-slate-600">{news.created_by || '-'}</span>
+                                </div>
+                              </div>
+                              <div className="flex justify-end pt-1">
+                                {deleteConfirm === news.id ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-rose-500">삭제하시겠습니까?</span>
+                                    <button onClick={() => handleDeleteNews(news.id)} className="px-3 py-1 bg-rose-500 text-white text-xs rounded-lg hover:bg-rose-600">삭제</button>
+                                    <button onClick={() => setDeleteConfirm(null)} className="px-3 py-1 bg-slate-200 text-slate-600 text-xs rounded-lg hover:bg-slate-300">취소</button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setDeleteConfirm(news.id); }}
+                                    className="px-3 py-1 text-xs text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                  >
+                                    삭제
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
     </div>
