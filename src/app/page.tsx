@@ -182,6 +182,7 @@ interface NewsItem {
   content: string;
   sentiment: string;
   impact: string;
+  created_by?: string;
 }
 
 interface NewsResponse {
