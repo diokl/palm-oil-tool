@@ -1533,8 +1533,15 @@ const NewsTab = () => {
 
   // Input form
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newNews, setNewNews] = useState({ date: '', content: '', sentiment: '보합', impact: 'Medium' });
+  const [showBulkForm, setShowBulkForm] = useState(false);
+  const [newNews, setNewNews] = useState({ date: '', content: '' });
   const [saving, setSaving] = useState(false);
+  const [aiResult, setAiResult] = useState<{ sentiment: string; impact: string } | null>(null);
+
+  // Bulk upload
+  const [bulkText, setBulkText] = useState('');
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkResults, setBulkResults] = useState<any[] | null>(null);
 
   useEffect(() => { fetchNews(); }, []);
 
@@ -1552,9 +1559,11 @@ const NewsTab = () => {
     }
   };
 
+  // 단건 뉴스 저장 — AI가 자동으로 sentiment/impact 판단
   const handleAddNews = async () => {
     if (!newNews.content) return;
     setSaving(true);
+    setAiResult(null);
     try {
       const res = await fetch('/api/news', {
         method: 'POST',
@@ -1562,20 +1571,88 @@ const NewsTab = () => {
         body: JSON.stringify({
           date: newNews.date || new Date().toISOString().slice(0, 10),
           content: newNews.content,
-          sentiment: newNews.sentiment,
-          impact: newNews.impact,
+          auto_analyze: true,
           created_by: 'user',
         }),
       });
+      const json = await res.json();
       if (res.ok) {
-        setShowAddForm(false);
-        setNewNews({ date: '', content: '', sentiment: '보합', impact: 'Medium' });
-        fetchNews();
+        setAiResult({ sentiment: json.sentiment, impact: json.impact });
+        setTimeout(() => {
+          setShowAddForm(false);
+          setNewNews({ date: '', content: '' });
+          setAiResult(null);
+          fetchNews();
+        }, 1500);
       }
     } catch (error) {
       console.error('Failed to add news:', error);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // 대량 텍스트 업로드
+  const handleBulkUpload = async () => {
+    if (!bulkText.trim()) return;
+    setBulkSaving(true);
+    setBulkResults(null);
+    try {
+      // 텍스트 파싱: "번호, 거래소, 제목, 날짜" 또는 줄별 자유 형식
+      const lines = bulkText.split('\n').filter(l => l.trim());
+      const parsedItems: { date: string; content: string }[] = [];
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        // 패턴 1: "번호, 거래소, 제목, 날짜" (쉼표 구분)
+        const csvMatch = trimmed.match(/^\d+\s*[,\t]\s*([^,\t]+)\s*[,\t]\s*(.+?)\s*[,\t]\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*$/);
+        if (csvMatch) {
+          const exchange = csvMatch[1].trim();
+          const title = csvMatch[2].trim();
+          const date = csvMatch[3].replace(/[/.]/g, '-');
+          parsedItems.push({ date, content: `[${exchange}] ${title}` });
+          continue;
+        }
+
+        // 패턴 2: "날짜 + 내용" (날짜가 앞에)
+        const dateFirstMatch = trimmed.match(/^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*[,:\-\t]\s*(.+)$/);
+        if (dateFirstMatch) {
+          parsedItems.push({ date: dateFirstMatch[1].replace(/[/.]/g, '-'), content: dateFirstMatch[2].trim() });
+          continue;
+        }
+
+        // 패턴 3: 날짜 없는 순수 텍스트 → 오늘 날짜
+        parsedItems.push({ date: new Date().toISOString().slice(0, 10), content: trimmed });
+      }
+
+      if (parsedItems.length === 0) {
+        alert('파싱할 수 있는 뉴스 항목이 없습니다.');
+        setBulkSaving(false);
+        return;
+      }
+
+      const res = await fetch('/api/news', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bulk_items: parsedItems }),
+      });
+
+      const json = await res.json();
+      if (res.ok) {
+        setBulkResults(json.results || []);
+        setTimeout(() => {
+          setShowBulkForm(false);
+          setBulkText('');
+          setBulkResults(null);
+          fetchNews();
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Bulk upload failed:', error);
+    } finally {
+      setBulkSaving(false);
     }
   };
 
@@ -1605,57 +1682,45 @@ const NewsTab = () => {
             <p className="text-2xl font-bold text-rose-600 tabular-nums">{sentimentCounts.약세}</p>
           </div>
         </div>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all shadow-sm whitespace-nowrap ${
-            showAddForm ? 'bg-slate-200 text-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'
-          }`}
-        >
-          {showAddForm ? '취소' : '+ 뉴스 입력'}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => { setShowAddForm(!showAddForm); setShowBulkForm(false); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm whitespace-nowrap ${
+              showAddForm ? 'bg-slate-200 text-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'
+            }`}
+          >
+            {showAddForm ? '취소' : '+ 뉴스 입력'}
+          </button>
+          <button
+            onClick={() => { setShowBulkForm(!showBulkForm); setShowAddForm(false); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm whitespace-nowrap ${
+              showBulkForm ? 'bg-slate-200 text-slate-700' : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+          >
+            {showBulkForm ? '취소' : '대량 업로드'}
+          </button>
+        </div>
       </div>
 
-      {/* Add News Form */}
+      {/* Single News Add Form — AI 자동 판단 */}
       {showAddForm && (
-        <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-3 animate-fade-in">
-          <p className="text-sm font-semibold text-slate-700">시황/뉴스 수동 입력</p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">날짜</label>
-              <input
-                type="date"
-                value={newNews.date}
-                onChange={(e) => setNewNews({ ...newNews, date: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">시황 전망</label>
-              <select
-                value={newNews.sentiment}
-                onChange={(e) => setNewNews({ ...newNews, sentiment: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
-              >
-                <option value="강세">강세</option>
-                <option value="보합">보합</option>
-                <option value="약세">약세</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">영향도</label>
-              <select
-                value={newNews.impact}
-                onChange={(e) => setNewNews({ ...newNews, impact: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
-              >
-                <option value="High">High</option>
-                <option value="Medium">Medium</option>
-                <option value="Low">Low</option>
-              </select>
-            </div>
+        <div className="card p-5 border-emerald-100 bg-emerald-50/30 space-y-3 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-slate-700">뉴스 입력</p>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 font-medium">AI 자동 분석</span>
+          </div>
+          <p className="text-xs text-slate-400">내용만 입력하면 AI가 시황 전망/영향도를 자동으로 판단합니다.</p>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">날짜 (미입력 시 오늘)</label>
+            <input
+              type="date"
+              value={newNews.date}
+              onChange={(e) => setNewNews({ ...newNews, date: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+            />
           </div>
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">내용 *</label>
+            <label className="text-xs text-slate-500 mb-1 block">뉴스 내용 *</label>
             <textarea
               value={newNews.content}
               onChange={(e) => setNewNews({ ...newNews, content: e.target.value })}
@@ -1664,13 +1729,85 @@ const NewsTab = () => {
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white resize-none"
             />
           </div>
+          {aiResult && (
+            <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white border border-slate-200 animate-fade-in">
+              <span className="text-xs text-slate-500">AI 판단 결과:</span>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                aiResult.sentiment === '강세' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' :
+                aiResult.sentiment === '약세' ? 'bg-rose-50 text-rose-600 border-rose-200' :
+                'bg-slate-50 text-slate-600 border-slate-200'
+              }`}>{aiResult.sentiment}</span>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                aiResult.impact === 'High' ? 'bg-rose-50 text-rose-600' :
+                aiResult.impact === 'Medium' ? 'bg-amber-50 text-amber-600' : 'bg-slate-50 text-slate-500'
+              }`}>영향: {aiResult.impact}</span>
+            </div>
+          )}
           <div className="flex justify-end">
             <button
               onClick={handleAddNews}
               disabled={saving || !newNews.content}
-              className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+              className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm flex items-center gap-2"
             >
-              {saving ? '저장 중...' : '저장'}
+              {saving ? (
+                <><svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>AI 분석 중...</>
+              ) : '저장 (AI 자동 분석)'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Upload Form */}
+      {showBulkForm && (
+        <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-3 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-slate-700">뉴스 대량 업로드</p>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 font-medium">AI 자동 분석</span>
+          </div>
+          <div className="text-xs text-slate-400 space-y-1">
+            <p>아래 형식으로 여러 뉴스를 한번에 입력하세요. 각 항목마다 AI가 시황/영향도를 자동 판단합니다.</p>
+            <div className="bg-white rounded p-2 font-mono text-slate-500 border border-slate-200">
+              <p>1, BMD, Palm oil rises on strong demand, 2024-03-23</p>
+              <p>2, CBOT, Soybean futures fall sharply, 2024-03-22</p>
+              <p>2024-03-21, 인도네시아 B50 바이오디젤 정책 시행 확정</p>
+              <p>말레이시아 재고 3개월 연속 감소 추세</p>
+            </div>
+          </div>
+          <div>
+            <textarea
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              placeholder="뉴스 목록을 붙여넣으세요..."
+              rows={8}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white resize-none font-mono"
+            />
+          </div>
+          {bulkResults && (
+            <div className="bg-white rounded-lg border border-slate-200 p-3 max-h-40 overflow-y-auto animate-fade-in">
+              <p className="text-xs font-semibold text-emerald-600 mb-2">{bulkResults.length}개 뉴스 업로드 완료!</p>
+              {bulkResults.map((r, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs py-1 border-b border-slate-100 last:border-0">
+                  <span className={`px-1.5 py-0.5 rounded text-white text-[10px] font-bold ${
+                    r.sentiment === '강세' ? 'bg-emerald-500' : r.sentiment === '약세' ? 'bg-rose-500' : 'bg-slate-400'
+                  }`}>{r.sentiment}</span>
+                  <span className="text-slate-400">{r.impact}</span>
+                  <span className="text-slate-600 truncate flex-1">{r.content}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <span className="text-xs text-slate-400 self-center">
+              {bulkText.split('\n').filter(l => l.trim()).length}개 라인 감지
+            </span>
+            <button
+              onClick={handleBulkUpload}
+              disabled={bulkSaving || !bulkText.trim()}
+              className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm flex items-center gap-2"
+            >
+              {bulkSaving ? (
+                <><svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>AI 분석 + 저장 중...</>
+              ) : '전체 업로드 (AI 분석)'}
             </button>
           </div>
         </div>
