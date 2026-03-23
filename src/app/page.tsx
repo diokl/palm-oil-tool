@@ -6,7 +6,7 @@ import {
   ComposedChart, Bar
 } from 'recharts';
 
-type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts';
+type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify';
 type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026';
 
 // ============ TYPES ============
@@ -1741,6 +1741,334 @@ const AlertsTab = () => {
   );
 };
 
+// ============ LC TAB ============
+
+const LCTab = () => {
+  const [purchaseData, setPurchaseData] = useState<PurchaseItem[]>([]);
+  const [selectedPurchaseId, setSelectedPurchaseId] = useState<number | null>(null);
+  const [lcFields, setLcFields] = useState<Record<string, string> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  useEffect(() => { fetchPurchases(); }, []);
+
+  const fetchPurchases = async () => {
+    try {
+      const res = await fetch('/api/purchases');
+      const json = await res.json();
+      setPurchaseData(json.data || []);
+    } catch (error) {
+      console.error('Failed to fetch purchases:', error);
+    }
+  };
+
+  const handleGenerateLC = async () => {
+    if (!selectedPurchaseId) return;
+    const purchase = purchaseData.find(p => p.id === selectedPurchaseId);
+    if (!purchase) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/lc/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          purchase_id: selectedPurchaseId,
+          product: purchase.product,
+          quantity_mt: purchase.quantity_mt,
+          contract_price: purchase.contract_price,
+          shipment_month: purchase.shipment_month,
+          supplier: purchase.supplier,
+          incoterms: purchase.incoterms,
+          payment_terms: purchase.payment_terms,
+          loading_port: purchase.loading_port,
+          discharge_port: purchase.discharge_port,
+        }),
+      });
+      const json = await res.json();
+      if (json.lc_fields) {
+        setLcFields(json.lc_fields);
+      }
+    } catch (error) {
+      console.error('Failed to generate LC:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFieldChange = (field: string, value: string) => {
+    setLcFields(prev => prev ? { ...prev, [field]: value } : null);
+  };
+
+  const handleExportXml = async () => {
+    if (!lcFields) return;
+    try {
+      const res = await fetch('/api/lc/export-xml', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lcFields),
+      });
+      const json = await res.json();
+      if (json.xml) {
+        // Trigger download
+        const blob = new Blob([json.xml], { type: 'application/xml' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = json.download_filename || 'lc.xml';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }
+    } catch (error) {
+      console.error('Failed to export LC:', error);
+    }
+  };
+
+  const lcFieldLabels: Record<string, string> = {
+    '40A': 'Form of Documentary Credit',
+    '20': 'Documentary Credit Number',
+    '31C': 'Date of Issue',
+    '31D': 'Date and Place of Expiry',
+    '50': 'Applicant',
+    '59': 'Beneficiary',
+    '32B': 'Currency Code, Amount',
+    '39A': 'Percentage Credit Amount Tolerance',
+    '41D': 'Available with...by...Negotiation',
+    '42C': 'Drafts at...Sight/Usance',
+    '43P': 'Partial Shipments',
+    '43T': 'Transshipment',
+    '44A': 'Port of Loading',
+    '44B': 'Port of Discharge',
+    '44C': 'Latest Date of Shipment',
+    '44D': 'Shipment Period',
+    '45A': 'Description of Goods/Services',
+    '46A': 'Documents Required',
+    '47A': 'Additional Conditions',
+    '71D': 'Charges',
+    '48': 'Period for Presentation',
+    '49': 'Confirmation Instructions',
+  };
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      {/* Selection Section */}
+      <div className="card p-5 space-y-4">
+        <div>
+          <label className="text-xs text-slate-500 mb-2 block font-medium">구매 이력 선택</label>
+          <select
+            value={selectedPurchaseId || ''}
+            onChange={(e) => { setSelectedPurchaseId(e.target.value ? parseInt(e.target.value) : null); setLcFields(null); }}
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+          >
+            <option value="">-- 구매 이력을 선택하세요 --</option>
+            {purchaseData.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.product} | {p.shipment_month} | ${p.contract_price}/MT
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          onClick={handleGenerateLC}
+          disabled={!selectedPurchaseId || loading}
+          className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          {loading ? 'LC 생성 중...' : 'LC 생성'}
+        </button>
+      </div>
+
+      {/* LC Fields Table */}
+      {lcFields && (
+        <>
+          <div className="card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider w-20">필드</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider w-40">레이블</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">값</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {Object.entries(lcFields).map(([field, value]) => (
+                  <tr key={field} className="hover:bg-slate-50/60 transition-colors">
+                    <td className="px-4 py-3 font-mono text-xs text-slate-600">{field}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{lcFieldLabels[field] || field}</td>
+                    <td className="px-4 py-3 text-sm">
+                      {editingField === field ? (
+                        <input
+                          type="text"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onBlur={() => { handleFieldChange(field, editValue); setEditingField(null); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { handleFieldChange(field, editValue); setEditingField(null); }
+                            if (e.key === 'Escape') setEditingField(null);
+                          }}
+                          className="w-full px-2 py-1 border border-blue-300 rounded-lg bg-blue-50 text-slate-800 text-xs"
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          onClick={() => { setEditingField(field); setEditValue(value); }}
+                          className="inline-block w-full text-slate-700 cursor-pointer hover:bg-blue-50/50 px-2 py-1 rounded break-words max-h-20 overflow-y-auto"
+                        >
+                          {value || '-'}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <button
+            onClick={handleExportXml}
+            className="w-full px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
+          >
+            XML 내보내기
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ============ DOC VERIFY TAB ============
+
+const DocVerifyTab = () => {
+  const [lcData, setLcData] = useState<string>('');
+  const [file, setFile] = useState<File | null>(null);
+  const [verification, setVerification] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleVerify = async () => {
+    if (!file || !lcData) return;
+
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('lc_data', lcData);
+
+      const res = await fetch('/api/doc-verify', {
+        method: 'POST',
+        body: formData,
+      });
+      const json = await res.json();
+      if (json.verification) {
+        setVerification(json.verification);
+      }
+    } catch (error) {
+      console.error('Failed to verify document:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      {/* Input Section */}
+      <div className="card p-5 space-y-4">
+        <div>
+          <label className="text-xs text-slate-500 mb-2 block font-medium">LC 데이터 (JSON)</label>
+          <textarea
+            value={lcData}
+            onChange={(e) => setLcData(e.target.value)}
+            placeholder='{"45A": "...", "46A": "...", "47A": "..."}'
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-mono h-24"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-slate-500 mb-2 block font-medium">서류 PDF 업로드</label>
+          <div className="flex items-center gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors"
+            >
+              파일 선택
+            </button>
+            <span className="text-sm text-slate-600">{file?.name || '선택된 파일 없음'}</span>
+          </div>
+        </div>
+
+        <button
+          onClick={handleVerify}
+          disabled={!file || !lcData || loading}
+          className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          {loading ? '검증 중...' : '서류 검증'}
+        </button>
+      </div>
+
+      {/* Results Section */}
+      {verification && (
+        <>
+          {/* Document Type */}
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-slate-700 mb-2">서류 유형</h3>
+            <p className="text-lg font-bold text-slate-800">{verification.document_type}</p>
+          </div>
+
+          {/* Summary */}
+          <div className={`card p-5 border-l-4 ${verification.summary.includes('discrepanc') ? 'border-l-amber-400 bg-amber-50/40' : 'border-l-emerald-400 bg-emerald-50/40'}`}>
+            <h3 className="text-sm font-semibold text-slate-700 mb-2">검증 결과</h3>
+            <p className="text-sm text-slate-700">{verification.summary}</p>
+          </div>
+
+          {/* Extracted Fields */}
+          {verification.extracted_fields && Object.keys(verification.extracted_fields).length > 0 && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">추출된 항목</h3>
+              <div className="grid grid-cols-2 gap-4">
+                {Object.entries(verification.extracted_fields).map(([key, value]) => (
+                  <div key={key}>
+                    <p className="text-xs text-slate-500 mb-1 font-medium">{key}</p>
+                    <p className="text-sm text-slate-700">{String(value) || '-'}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Discrepancies */}
+          {verification.discrepancies && verification.discrepancies.length > 0 && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">불일치 사항</h3>
+              <div className="space-y-3">
+                {verification.discrepancies.map((disc: any, idx: number) => {
+                  const severityColor = disc.severity === 'error' ? 'bg-rose-50 border-l-rose-400 text-rose-700' :
+                    disc.severity === 'warning' ? 'bg-amber-50 border-l-amber-400 text-amber-700' : 'bg-blue-50 border-l-blue-400 text-blue-700';
+                  return (
+                    <div key={idx} className={`border-l-4 p-3 rounded ${severityColor}`}>
+                      <p className="text-xs font-semibold mb-1">{disc.field}</p>
+                      <p className="text-xs">LC 요구: {disc.lc_value}</p>
+                      <p className="text-xs">서류: {disc.doc_value}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
 // ============ MAIN COMPONENT ============
 
 export default function Home() {
@@ -1777,6 +2105,8 @@ export default function Home() {
     { id: 'purchases', label: '구매 이력', icon: '💰' },
     { id: 'news', label: '뉴스', icon: '📰' },
     { id: 'alerts', label: '알림', icon: '🔔' },
+    { id: 'lc', label: 'LC 개설', icon: '📄' },
+    { id: 'doc-verify', label: '서류 검증', icon: '✅' },
   ];
 
   const alertCount = dashboardData?.alerts?.filter(a => a.alert_level !== 'normal').length || 0;
@@ -1896,6 +2226,8 @@ export default function Home() {
           {activeTab === 'purchases' && <PurchasesTab />}
           {activeTab === 'news' && <NewsTab />}
           {activeTab === 'alerts' && <AlertsTab />}
+          {activeTab === 'lc' && <LCTab />}
+          {activeTab === 'doc-verify' && <DocVerifyTab />}
         </div>
       </main>
     </div>

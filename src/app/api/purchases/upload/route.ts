@@ -138,12 +138,76 @@ export async function POST(request: NextRequest) {
     // Extract text from PDF
     const text = await parsePdf(buffer);
 
-    // Parse SC fields
+    // Parse SC fields using regex
     const fields = extractSCFields(text);
+
+    // Try Claude API to fill in missing fields
+    let claudeEnhanced = { ...fields };
+    if (process.env.ANTHROPIC_API_KEY) {
+      try {
+        const Anthropic = (await import('@anthropic-ai/sdk')).default;
+        const client = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+        });
+
+        const missingFields = [];
+        const requiredFields = [
+          'contract_number', 'contract_date', 'product', 'quantity_mt',
+          'contract_price', 'shipment_month', 'supplier', 'incoterms',
+          'payment_terms', 'loading_port', 'discharge_port'
+        ];
+
+        for (const field of requiredFields) {
+          if (!fields[field]) {
+            missingFields.push(field);
+          }
+        }
+
+        if (missingFields.length > 0) {
+          const response = await client.messages.create({
+            model: 'claude-3-5-sonnet-20241022',
+            max_tokens: 1000,
+            messages: [
+              {
+                role: 'user',
+                content: `Extract the following fields from this SC (Sales Contract) document text. Return a JSON object with only these fields: contract_number, contract_date, product, quantity_mt, contract_price, shipment_month, supplier, incoterms, payment_terms, loading_port, discharge_port.
+
+Use null for any fields you cannot extract. For dates, use YYYY-MM-DD format. For month/year dates, use YYYY-MM format. For prices, use numbers only (no currency). For quantities, use numbers only (no units).
+
+Document text:
+${text.substring(0, 3000)}
+
+Return only valid JSON, no other text.`,
+              },
+            ],
+          });
+
+          try {
+            const claudeText = response.content[0].type === 'text' ? response.content[0].text : '';
+            // Try to extract JSON from the response
+            const jsonMatch = claudeText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const claudeData = JSON.parse(jsonMatch[0]);
+              // Merge: regex fields take precedence, Claude fills gaps
+              for (const key in claudeData) {
+                if (!fields[key] && claudeData[key]) {
+                  claudeEnhanced[key] = claudeData[key];
+                }
+              }
+            }
+          } catch (parseError) {
+            console.warn('Failed to parse Claude response:', parseError);
+          }
+        }
+      } catch (error) {
+        console.warn('Claude API enhancement failed:', error);
+        // Continue with regex-only results
+      }
+    }
 
     return NextResponse.json({
       success: true,
-      extracted: fields,
+      extracted: claudeEnhanced,
       raw_text: text.substring(0, 2000), // For debugging, send first 2000 chars
     });
   } catch (error: any) {
