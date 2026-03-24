@@ -1,69 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-async function parsePdf(buffer: Buffer): Promise<string> {
-  const mod = await import('pdf-parse');
-
-  // pdf-parse v1 style: default export is a function
-  if (typeof (mod as any).default === 'function') {
-    const pdfParse = (mod as any).default;
-    const data = await pdfParse(buffer);
-    return data.text;
-  }
-
-  // pdf-parse v2 style: PDFParse class
-  if ((mod as any).PDFParse) {
-    const { PDFParse } = mod as any;
-    const uint8 = new Uint8Array(buffer);
-    const pdf = new PDFParse(uint8);
-    await pdf.load();
-    const result = await pdf.getText();
-    const text = typeof result === 'string' ? result : (result?.text || '');
-    pdf.destroy();
-    // If page-based, concat page texts
-    if (!text && result?.pages) {
-      let allText = '';
-      for (let i = 1; i <= (result.total || 0); i++) {
-        try { allText += await pdf.getPageText(i) + '\n'; } catch {}
-      }
-      return allText;
-    }
-    return text;
-  }
-
-  // Fallback: try calling the module itself
-  const pdfParse = (mod as any).default || mod;
-  const data = await pdfParse(buffer);
-  return data.text || '';
-}
-
-// 월물 이름을 YYYY-MM 형식으로 변환
-function monthToYYYYMM(monthName: string, baseYear: number): string {
-  const monthMap: Record<string, string> = {
-    'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'april': '04',
-    'may': '05', 'jun': '06', 'june': '06', 'jul': '07', 'aug': '08',
-    'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12',
-  };
-  const lower = monthName.toLowerCase().trim();
-
-  // 분기물: Jul/Aug/Sep, Oct/Nov/Dec, Jan/Feb/Mar
-  if (lower.includes('/')) {
-    const firstMonth = lower.split('/')[0].trim();
-    const mm = monthMap[firstMonth];
-    if (mm) {
-      // Jan/Feb/Mar인 경우 다음 해
-      const year = parseInt(mm) <= 3 ? baseYear + 1 : baseYear;
-      return `${year}-${mm}`;
-    }
-  }
-
-  const mm = monthMap[lower];
-  if (mm) {
-    const year = parseInt(mm) < 3 ? baseYear + 1 : baseYear;
-    return `${baseYear}-${mm}`;
-  }
-
-  return monthName;
-}
+import Anthropic from '@anthropic-ai/sdk';
 
 interface ParsedBMDData {
   report_date: string;
@@ -74,112 +10,39 @@ interface ParsedBMDData {
   cpo_myr: Array<{ month: string; contract_month: string; ask: number; bid: number | null }>;
 }
 
-function parseBMDText(text: string): ParsedBMDData {
-  const result: ParsedBMDData = {
-    report_date: '',
-    exchange_rate: null,
-    rbd_palm_oil: [],
-    rbd_palm_olein: [],
-    fcpo_usd: [],
-    cpo_myr: [],
-  };
+const EXTRACTION_PROMPT = `You are a BMD (Bursa Malaysia Derivatives) market data extractor.
+Analyze this PDF and extract the following data in EXACT JSON format.
 
-  // 날짜 추출: "19 Mar 2026" 또는 "March 19 (Close)"
-  const dateMatch = text.match(/(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})/i);
-  if (dateMatch) {
-    const months: Record<string, string> = {
-      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-    };
-    const mm = months[dateMatch[2].toLowerCase().substring(0, 3)] || '01';
-    result.report_date = `${dateMatch[3]}-${mm}-${dateMatch[1].padStart(2, '0')}`;
-  }
+Extract:
+1. report_date: The report date in "YYYY-MM-DD" format
+2. exchange_rate: The Ringgit/USD exchange rate (number)
+3. rbd_palm_oil: Array of RBD PALM OIL entries. For each month, extract:
+   - month: month name as shown (e.g. "Apr", "May", "Jun", "Jul/Aug/Sep")
+   - contract_month: in "YYYY-MM" format (use the first month for quarter contracts)
+   - ask: the ASK price (number, USD/MT)
+4. rbd_palm_olein: Array of RBD PALM OLEIN entries with:
+   - month, contract_month, ask, bid (number or null), values (number or null)
+5. fcpo_usd: Array of Bursa Malaysia FCPO USD entries with:
+   - month, contract_month, last_done_trade (number)
+6. cpo_myr: Array of Malaysian Crude Palm Oil in Ringgit entries with:
+   - month, contract_month, ask, bid (number or null)
 
-  // 기준 연도
-  const baseYear = result.report_date ? parseInt(result.report_date.substring(0, 4)) : new Date().getFullYear();
+Rules:
+- Prices are typically between 500-3000 USD/MT or MYR/MT
+- For quarter contracts like "Jul/Aug/Sep", use the first month for contract_month
+- For months Jan-Mar, they likely belong to the NEXT year
+- If a value is "N/A", "-", or missing, use null
+- Return ONLY valid JSON, no markdown, no explanation
 
-  // 환율 추출
-  const fxMatch = text.match(/Ringgit\/USD\s*=\s*([\d.]+)/i);
-  if (fxMatch) {
-    result.exchange_rate = parseFloat(fxMatch[1]);
-  }
-
-  const lines = text.split('\n').map(l => l.trim());
-
-  // 섹션 파싱 함수
-  let currentSection = '';
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // 섹션 감지
-    if (/RBD PALM OIL\s*$/i.test(line) && !/OLEIN|KERNEL|STEARIN/i.test(line)) {
-      currentSection = 'RBD_PALM_OIL';
-      continue;
-    }
-    if (/RBD PALM OLEIN/i.test(line)) {
-      currentSection = 'RBD_PALM_OLEIN';
-      continue;
-    }
-    if (/Bursa Malaysia Crude Palm Oil.*USD/i.test(line) || /FCPO.*USD/i.test(line)) {
-      currentSection = 'FCPO_USD';
-      continue;
-    }
-    if (/MALAYSIAN CRUDE PALM OIL in ringgit/i.test(line)) {
-      currentSection = 'CPO_MYR';
-      continue;
-    }
-    if (/={5,}/.test(line) || /OTHER REFINED/i.test(line) || /REFINED PALM OIL PRODUCTS/i.test(line)) {
-      if (!/RBD PALM OIL/i.test(lines[i + 1] || '')) {
-        // Don't reset if next line starts our target section
-      }
-      continue;
-    }
-    if (/BID\s+ASK|ASK\s+VALUES|LAST DONE TRADE|ASK\s+RIC/i.test(line)) {
-      continue; // header line
-    }
-
-    // 데이터 행 파싱
-    const monthMatch = line.match(/^((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(?:\/\w+)*(?:uary|ruary|ch|il|e|y|ust|tember|ober|ember)?)\s+/i);
-    if (!monthMatch) continue;
-
-    const monthName = monthMatch[1];
-    const rest = line.substring(monthMatch[0].length).trim();
-    const nums = rest.match(/[\d,.]+/g)?.map(n => parseFloat(n.replace(/,/g, ''))) || [];
-
-    const contractMonth = monthToYYYYMM(monthName, baseYear);
-
-    if (currentSection === 'RBD_PALM_OIL') {
-      // Format: [BID(N/A)] ASK [VALUES(N/A)] [RIC]
-      // We mainly want ASK
-      const askVal = nums.find(n => n > 500 && n < 3000);
-      if (askVal) {
-        result.rbd_palm_oil.push({ month: monthName, contract_month: contractMonth, ask: askVal });
-      }
-    } else if (currentSection === 'RBD_PALM_OLEIN') {
-      // BID ASK VALUES
-      if (nums.length >= 2) {
-        const ask = nums.length >= 3 ? nums[1] : nums[0];
-        const values = nums.length >= 3 ? nums[2] : nums[1];
-        const bid = nums.length >= 3 ? nums[0] : null;
-        result.rbd_palm_olein.push({ month: monthName, contract_month: contractMonth, ask, bid, values });
-      } else if (nums.length === 1) {
-        result.rbd_palm_olein.push({ month: monthName, contract_month: contractMonth, ask: nums[0], bid: null, values: null });
-      }
-    } else if (currentSection === 'FCPO_USD') {
-      const val = nums.find(n => n > 500 && n < 3000);
-      if (val) {
-        result.fcpo_usd.push({ month: monthName, contract_month: contractMonth, last_done_trade: val });
-      }
-    } else if (currentSection === 'CPO_MYR') {
-      if (nums.length >= 2) {
-        result.cpo_myr.push({ month: monthName, contract_month: contractMonth, bid: nums[0], ask: nums[1] });
-      }
-    }
-  }
-
-  return result;
-}
+Return exactly this JSON structure:
+{
+  "report_date": "YYYY-MM-DD",
+  "exchange_rate": number,
+  "rbd_palm_oil": [...],
+  "rbd_palm_olein": [...],
+  "fcpo_usd": [...],
+  "cpo_myr": [...]
+}`;
 
 export async function POST(request: NextRequest) {
   try {
@@ -194,19 +57,79 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'PDF 파일만 업로드 가능합니다' }, { status: 400 });
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const text = await parsePdf(buffer);
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'ANTHROPIC_API_KEY가 설정되지 않았습니다' }, { status: 500 });
+    }
 
-    const parsed = parseBMDText(text);
+    // PDF를 base64로 변환
+    const arrayBuffer = await file.arrayBuffer();
+    const base64Data = Buffer.from(arrayBuffer).toString('base64');
+
+    // Claude API로 PDF 내용 추출
+    const anthropic = new Anthropic({ apiKey });
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: 'application/pdf',
+                data: base64Data,
+              },
+            },
+            {
+              type: 'text',
+              text: EXTRACTION_PROMPT,
+            },
+          ],
+        },
+      ],
+    });
+
+    // Claude 응답에서 JSON 추출
+    const responseText = message.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map((block) => block.text)
+      .join('');
+
+    // JSON 파싱 (코드블록 안에 있을 수 있으므로 추출)
+    let jsonStr = responseText;
+    const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    } else {
+      // Try to find JSON object directly
+      const objMatch = responseText.match(/\{[\s\S]*\}/);
+      if (objMatch) {
+        jsonStr = objMatch[0];
+      }
+    }
+
+    const parsed: ParsedBMDData = JSON.parse(jsonStr);
 
     return NextResponse.json({
       success: true,
       ...parsed,
-      raw_text: text.substring(0, 3000),
+      raw_text: `[Claude API로 추출] 파일: ${file.name}, 모델: claude-sonnet-4-20250514`,
     });
   } catch (error: any) {
     console.error('BMD PDF parse error:', error);
-    return NextResponse.json({ error: `PDF 파싱 실패: ${error.message}` }, { status: 500 });
+
+    // 더 구체적인 에러 메시지
+    let errorMsg = error.message || 'Unknown error';
+    if (errorMsg.includes('authentication') || errorMsg.includes('api_key')) {
+      errorMsg = 'Anthropic API 키가 유효하지 않습니다';
+    } else if (errorMsg.includes('rate_limit')) {
+      errorMsg = 'API 호출 한도 초과. 잠시 후 다시 시도해주세요';
+    }
+
+    return NextResponse.json({ error: `PDF 파싱 실패: ${errorMsg}` }, { status: 500 });
   }
 }

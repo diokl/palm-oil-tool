@@ -1,12 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-// Dynamic import for pdf-parse to avoid SSR issues
-async function parsePdf(buffer: Buffer): Promise<string> {
-  const mod = await import('pdf-parse');
-  const pdfParse = (mod as any).default || mod;
-  const data = await pdfParse(buffer);
-  return data.text;
-}
+import Anthropic from '@anthropic-ai/sdk';
 
 // Extract SC fields from PDF text using pattern matching
 function extractSCFields(text: string): Record<string, any> {
@@ -77,13 +70,11 @@ function extractSCFields(text: string): Record<string, any> {
 }
 
 function normalizeDate(raw: string): string {
-  // Try to parse various date formats to YYYY-MM-DD
   const months: Record<string, string> = {
     jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
     jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
   };
 
-  // "26 Feb 2026" or "26-Feb-2026"
   const m1 = raw.match(/(\d{1,2})[\s\/\-\.]+([A-Za-z]+)[\s\/\-\.]+(\d{2,4})/);
   if (m1) {
     const mon = months[m1[2].toLowerCase().substring(0, 3)];
@@ -91,7 +82,6 @@ function normalizeDate(raw: string): string {
     return `${year}-${mon}-${m1[1].padStart(2, '0')}`;
   }
 
-  // "2026-02-26"
   const m2 = raw.match(/(\d{4})[\-\/](\d{2})[\-\/](\d{2})/);
   if (m2) return `${m2[1]}-${m2[2]}-${m2[3]}`;
 
@@ -104,7 +94,6 @@ function normalizeMonth(raw: string): string {
     jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
   };
 
-  // "Feb 2026" or "February 2026"
   const m1 = raw.match(/([A-Za-z]+)[\s\/\-]*(\d{2,4})/);
   if (m1) {
     const mon = months[m1[1].toLowerCase().substring(0, 3)];
@@ -112,7 +101,6 @@ function normalizeMonth(raw: string): string {
     return mon ? `${year}-${mon}` : raw;
   }
 
-  // "2026-02" or "2026/02"
   const m2 = raw.match(/(\d{4})[\-\/](\d{2})/);
   if (m2) return `${m2[1]}-${m2[2]}`;
 
@@ -132,86 +120,93 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'PDF 파일만 업로드 가능합니다' }, { status: 400 });
     }
 
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'ANTHROPIC_API_KEY가 설정되지 않았습니다' }, { status: 500 });
+    }
+
+    // PDF를 base64로 변환
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const base64Data = Buffer.from(arrayBuffer).toString('base64');
 
-    // Extract text from PDF
-    const text = await parsePdf(buffer);
+    // Claude API로 PDF 텍스트 추출 + SC 필드 파싱
+    const anthropic = new Anthropic({ apiKey });
 
-    // Parse SC fields using regex
-    const fields = extractSCFields(text);
-
-    // Try Claude API to fill in missing fields
-    let claudeEnhanced = { ...fields };
-    if (process.env.ANTHROPIC_API_KEY) {
-      try {
-        const Anthropic = (await import('@anthropic-ai/sdk')).default;
-        const client = new Anthropic({
-          apiKey: process.env.ANTHROPIC_API_KEY,
-        });
-
-        const missingFields = [];
-        const requiredFields = [
-          'contract_number', 'contract_date', 'product', 'quantity_mt',
-          'contract_price', 'shipment_month', 'supplier', 'incoterms',
-          'payment_terms', 'loading_port', 'discharge_port'
-        ];
-
-        for (const field of requiredFields) {
-          if (!fields[field]) {
-            missingFields.push(field);
-          }
-        }
-
-        if (missingFields.length > 0) {
-          const response = await client.messages.create({
-            model: 'claude-3-5-sonnet-20241022',
-            max_tokens: 1000,
-            messages: [
-              {
-                role: 'user',
-                content: `Extract the following fields from this SC (Sales Contract) document text. Return a JSON object with only these fields: contract_number, contract_date, product, quantity_mt, contract_price, shipment_month, supplier, incoterms, payment_terms, loading_port, discharge_port.
-
-Use null for any fields you cannot extract. For dates, use YYYY-MM-DD format. For month/year dates, use YYYY-MM format. For prices, use numbers only (no currency). For quantities, use numbers only (no units).
-
-Document text:
-${text.substring(0, 3000)}
-
-Return only valid JSON, no other text.`,
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: 'application/pdf',
+                data: base64Data,
               },
-            ],
-          });
+            },
+            {
+              type: 'text',
+              text: `Extract the following fields from this SC (Sales Contract) PDF document. Return a JSON object with these fields:
+- contract_number: Contract reference number
+- contract_date: in YYYY-MM-DD format
+- product: "RBD" or "RSPO" (based on product description)
+- quantity_mt: quantity in metric tons (number only)
+- contract_price: price in USD per MT (number only)
+- shipment_month: in YYYY-MM format
+- supplier: seller/supplier company name
+- incoterms: CIF, FOB, CFR, etc.
+- payment_terms: payment terms text
+- loading_port: port of loading
+- discharge_port: port of discharge
 
-          try {
-            const claudeText = response.content[0].type === 'text' ? response.content[0].text : '';
-            // Try to extract JSON from the response
-            const jsonMatch = claudeText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const claudeData = JSON.parse(jsonMatch[0]);
-              // Merge: regex fields take precedence, Claude fills gaps
-              for (const key in claudeData) {
-                if (!fields[key] && claudeData[key]) {
-                  claudeEnhanced[key] = claudeData[key];
-                }
-              }
-            }
-          } catch (parseError) {
-            console.warn('Failed to parse Claude response:', parseError);
-          }
+Use null for any fields you cannot extract. Return ONLY valid JSON, no markdown, no explanation.`,
+            },
+          ],
+        },
+      ],
+    });
+
+    // Claude 응답에서 JSON 추출
+    const responseText = message.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map((block) => block.text)
+      .join('');
+
+    let extracted: Record<string, any> = {};
+    try {
+      let jsonStr = responseText;
+      const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
+      } else {
+        const objMatch = responseText.match(/\{[\s\S]*\}/);
+        if (objMatch) {
+          jsonStr = objMatch[0];
         }
-      } catch (error) {
-        console.warn('Claude API enhancement failed:', error);
-        // Continue with regex-only results
       }
+      extracted = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      console.warn('Failed to parse Claude JSON response, using empty result');
     }
 
     return NextResponse.json({
       success: true,
-      extracted: claudeEnhanced,
-      raw_text: text.substring(0, 2000), // For debugging, send first 2000 chars
+      extracted,
+      raw_text: `[Claude API로 추출] 파일: ${file.name}, 모델: claude-sonnet-4-20250514`,
     });
   } catch (error: any) {
     console.error('PDF parse error:', error);
-    return NextResponse.json({ error: `PDF 파싱 실패: ${error.message}` }, { status: 500 });
+
+    let errorMsg = error.message || 'Unknown error';
+    if (errorMsg.includes('authentication') || errorMsg.includes('api_key')) {
+      errorMsg = 'Anthropic API 키가 유효하지 않습니다';
+    } else if (errorMsg.includes('rate_limit')) {
+      errorMsg = 'API 호출 한도 초과. 잠시 후 다시 시도해주세요';
+    }
+
+    return NextResponse.json({ error: `PDF 파싱 실패: ${errorMsg}` }, { status: 500 });
   }
 }

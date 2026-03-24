@@ -6,9 +6,14 @@ import { calculateBoxRange } from '@/lib/box-range';
 
 export async function GET() {
   try {
-    await seedInitialData();
+    // Seed data (best-effort: skip if writes are blocked on free tier)
+    try {
+      await seedInitialData();
+    } catch (seedErr: any) {
+      console.warn('Seed data skipped:', seedErr.message);
+    }
 
-    // Active alerts
+    // Active alerts (computed in-memory, DB write is best-effort)
     const alerts = await generateAlerts();
 
     // Latest FCPO prices (most recent date, all contract months)

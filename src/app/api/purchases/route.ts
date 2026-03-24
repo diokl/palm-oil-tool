@@ -26,8 +26,8 @@ async function ensureExtendedColumns() {
 
 export async function GET() {
   try {
-    await seedInitialData();
-    await ensureExtendedColumns();
+    try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
+    try { await ensureExtendedColumns(); } catch (e: any) { console.warn('Column migration skipped:', e.message); }
 
     const data = await dbAll('SELECT * FROM purchases ORDER BY contract_date DESC');
 

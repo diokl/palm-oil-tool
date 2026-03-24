@@ -36,8 +36,6 @@ export async function recalcInventory(product: 'RBD' | 'RSPO', year: number, pre
 export async function generateAlerts(): Promise<Alert[]> {
   const alerts: Alert[] = [];
 
-  await dbRun(`UPDATE alerts SET is_active = 0`);
-
   for (const product of ['RBD', 'RSPO'] as const) {
     const rows = await dbAll(
       `SELECT * FROM inventory WHERE product = ? ORDER BY year ASC, month ASC`,
@@ -101,12 +99,18 @@ export async function generateAlerts(): Promise<Alert[]> {
     });
   }
 
-  for (const a of alerts) {
-    await dbRun(
-      `INSERT INTO alerts (product, alert_level, depletion_month, required_volume, recommended_shipment, current_price, box_range_zone, message, action_taken, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [a.product, a.alert_level, a.depletion_month, a.required_volume, a.recommended_shipment, a.current_price, a.box_range_zone, a.message, a.action_taken, 1]
-    );
+  // Save alerts to DB (best-effort, don't fail if writes are blocked)
+  try {
+    await dbRun(`UPDATE alerts SET is_active = 0`);
+    for (const a of alerts) {
+      await dbRun(
+        `INSERT INTO alerts (product, alert_level, depletion_month, required_volume, recommended_shipment, current_price, box_range_zone, message, action_taken, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [a.product, a.alert_level, a.depletion_month, a.required_volume, a.recommended_shipment, a.current_price, a.box_range_zone, a.message, a.action_taken, 1]
+      );
+    }
+  } catch (e) {
+    console.warn('Alert DB write skipped (read-only mode):', (e as Error).message);
   }
 
   return alerts;

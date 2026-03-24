@@ -4,7 +4,7 @@ import { calculateBoxRange } from '@/lib/box-range';
 
 export async function GET(request: NextRequest) {
   try {
-    await seedInitialData();
+    try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
     const { searchParams } = new URL(request.url);
     const contractMonth = searchParams.get('contract_month') || '2026-04';
     const currentPrice = searchParams.get('current_price');

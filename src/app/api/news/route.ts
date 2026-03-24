@@ -48,7 +48,7 @@ async function analyzeNewsWithAI(content: string): Promise<{ sentiment: string; 
 
 export async function GET(request: NextRequest) {
   try {
-    await seedInitialData();
+    try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get('limit') || '30');
 

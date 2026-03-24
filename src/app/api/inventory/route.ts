@@ -5,7 +5,7 @@ import { recalcInventory } from '@/lib/inventory-calc';
 
 export async function GET(request: NextRequest) {
   try {
-    await seedInitialData();
+    try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
     const { searchParams } = new URL(request.url);
     const product = searchParams.get('product');
     const year = searchParams.get('year');

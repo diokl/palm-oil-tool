@@ -6,7 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export async function POST(request: NextRequest) {
   try {
-    await seedInitialData();
+    try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
 
     // Gather context
     const recentNews = await dbAll(
