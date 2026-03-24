@@ -117,12 +117,26 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const idsParam = searchParams.get('ids'); // 대량 삭제: comma-separated ids
+
+    if (idsParam) {
+      // 대량 삭제
+      const ids = idsParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+      if (ids.length === 0) {
+        return NextResponse.json({ error: 'valid ids are required' }, { status: 400 });
+      }
+      const placeholders = ids.map(() => '?').join(',');
+      await dbRun(`DELETE FROM news WHERE id IN (${placeholders})`, ids);
+      return NextResponse.json({ success: true, deleted: ids.length });
+    }
+
     if (!id) {
-      return NextResponse.json({ error: 'id is required' }, { status: 400 });
+      return NextResponse.json({ error: 'id or ids is required' }, { status: 400 });
     }
     await dbRun('DELETE FROM news WHERE id = ?', [parseInt(id)]);
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, deleted: 1 });
   } catch (error: any) {
+    console.error('News DELETE error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

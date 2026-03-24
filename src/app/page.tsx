@@ -1834,6 +1834,11 @@ const NewsTab = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
+  // Bulk select/delete
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   useEffect(() => { fetchNews(); }, []);
 
   const fetchNews = async () => {
@@ -1851,13 +1856,56 @@ const NewsTab = () => {
   };
 
   const handleDeleteNews = async (id: number) => {
+    setDeleteError(null);
     try {
-      await fetch(`/api/news?id=${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/news?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `삭제 실패 (${res.status})`);
+      }
       setDeleteConfirm(null);
       setExpandedId(null);
       fetchNews();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete news:', error);
+      setDeleteError(error.message || '삭제에 실패했습니다.');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setDeleteError(null);
+    try {
+      const idsStr = Array.from(selectedIds).join(',');
+      const res = await fetch(`/api/news?ids=${idsStr}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `대량 삭제 실패 (${res.status})`);
+      }
+      setSelectedIds(new Set());
+      setBulkDeleteConfirm(false);
+      setExpandedId(null);
+      fetchNews();
+    } catch (error: any) {
+      console.error('Failed to bulk delete news:', error);
+      setDeleteError(error.message || '대량 삭제에 실패했습니다.');
+    }
+  };
+
+  const toggleSelectNews = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === newsData.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(newsData.map(n => n.id)));
     }
   };
 
@@ -2115,6 +2163,14 @@ const NewsTab = () => {
         </div>
       )}
 
+      {/* Delete Error Toast */}
+      {deleteError && (
+        <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center justify-between">
+          <span className="text-sm text-rose-700">{deleteError}</span>
+          <button onClick={() => setDeleteError(null)} className="text-rose-400 hover:text-rose-600 text-xs ml-3">✕</button>
+        </div>
+      )}
+
       {/* News List — 날짜별 그룹핑 */}
       {loading ? (
         <div className="space-y-3">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-20" />)}</div>
@@ -2125,6 +2181,36 @@ const NewsTab = () => {
         </div>
       ) : (
         <div className="space-y-4">
+          {/* 대량 선택/삭제 컨트롤 */}
+          <div className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-4 py-2.5">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedIds.size === newsData.length && newsData.length > 0}
+                onChange={toggleSelectAll}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-xs text-slate-600">
+                {selectedIds.size > 0 ? `${selectedIds.size}개 선택됨` : '전체 선택'}
+              </span>
+            </label>
+            {selectedIds.size > 0 && (
+              <div className="flex items-center gap-2">
+                {bulkDeleteConfirm ? (
+                  <>
+                    <span className="text-xs text-rose-500">{selectedIds.size}개를 삭제하시겠습니까?</span>
+                    <button onClick={handleBulkDelete} className="px-3 py-1 bg-rose-500 text-white text-xs rounded-lg hover:bg-rose-600">삭제</button>
+                    <button onClick={() => setBulkDeleteConfirm(false)} className="px-3 py-1 bg-slate-200 text-slate-600 text-xs rounded-lg hover:bg-slate-300">취소</button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => setSelectedIds(new Set())} className="px-3 py-1 text-xs text-slate-500 hover:bg-slate-100 rounded-lg">선택 해제</button>
+                    <button onClick={() => setBulkDeleteConfirm(true)} className="px-3 py-1 bg-rose-500 text-white text-xs rounded-lg hover:bg-rose-600">선택 삭제</button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {(() => {
             // 날짜별 그룹핑
             const grouped: Record<string, NewsItem[]> = {};
@@ -2166,6 +2252,13 @@ const NewsTab = () => {
                             className="p-3.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50/50 transition-colors"
                             onClick={() => setExpandedId(isExpanded ? null : news.id)}
                           >
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(news.id)}
+                              onChange={() => toggleSelectNews(news.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 flex-shrink-0"
+                            />
                             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${sStyle}`}>
                               {news.sentiment}
                             </span>
