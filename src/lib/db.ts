@@ -122,6 +122,11 @@ async function ensureSchema() {
   if (!schemaPromise) {
     schemaPromise = initializeDbSchema().then(() => {
       schemaInitialized = true;
+    }).catch((err) => {
+      // If writes are blocked (e.g. Turso free tier limit), tables likely already exist
+      console.warn('Schema init skipped (tables may already exist):', err.message);
+      schemaInitialized = true;
+      schemaPromise = null;
     });
   }
   return schemaPromise;
