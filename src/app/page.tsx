@@ -1047,10 +1047,10 @@ const FCPOTab = () => {
           <p className="text-slate-500 text-sm text-center py-12">데이터 없음</p>
         ) : (
           <ResponsiveContainer width="100%" height={380}>
-            <ComposedChart data={fcpoData}>
+            <ComposedChart data={[...fcpoData].reverse()}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: '11px' }} />
-              <YAxis stroke="#94a3b8" style={{ fontSize: '11px' }} />
+              <YAxis stroke="#94a3b8" style={{ fontSize: '11px' }} domain={['auto', 'auto']} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: 'rgba(255,255,255,0.96)',
@@ -1062,9 +1062,9 @@ const FCPOTab = () => {
               />
               <Legend wrapperStyle={{ fontSize: '12px' }} />
               {selectedMonths.map((month, idx) => {
-                const colors = ['#2563eb', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4'];
+                const colors = ['#2563eb', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#d946ef', '#ea580c', '#65a30d', '#0891b2', '#7c3aed', '#be123c'];
                 return (
-                  <Line key={month} type="monotone" dataKey={`${month}_usd`} stroke={colors[idx % colors.length]} strokeWidth={2} dot={{ r: 2 }} name={`${month} USD`} />
+                  <Line key={month} type="monotone" dataKey={`${month}_usd`} stroke={colors[idx % colors.length]} strokeWidth={2} dot={false} name={`${month} USD`} connectNulls />
                 );
               })}
             </ComposedChart>
