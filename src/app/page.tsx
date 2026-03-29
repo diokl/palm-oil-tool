@@ -724,11 +724,12 @@ const FCPOTab = () => {
       const json: FCPOData = await res.json();
       setFcpoData(json.data || []);
       const months = json.contract_months || [];
-      const recentMonths = months.filter((m: string) => m >= '2025-01');
-      setContractMonths(recentMonths);
+      // 2024년 이후 계약월 전체 표시 (2024-01 ~ 2026-12)
+      const availableMonths = months.filter((m: string) => m >= '2024-01');
+      setContractMonths(availableMonths);
       // 기본 선택: 2026년 전체 월 (1~12월)
-      const defaultSelected = recentMonths.filter((m: string) => m >= '2026-01' && m <= '2026-12');
-      setSelectedMonths(defaultSelected.length > 0 ? defaultSelected : recentMonths.slice(-6));
+      const defaultSelected = availableMonths.filter((m: string) => m >= '2026-01' && m <= '2026-12');
+      setSelectedMonths(defaultSelected.length > 0 ? defaultSelected : availableMonths.slice(-6));
     } catch (error) {
       console.error('Failed to fetch FCPO data:', error);
     } finally {
@@ -1047,7 +1048,7 @@ const FCPOTab = () => {
           <p className="text-slate-500 text-sm text-center py-12">데이터 없음</p>
         ) : (
           <ResponsiveContainer width="100%" height={380}>
-            <ComposedChart data={[...fcpoData].reverse()}>
+            <ComposedChart data={[...fcpoData].filter((row) => selectedMonths.some((month) => row[`${month}_usd`])).reverse()}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: '11px' }} />
               <YAxis stroke="#94a3b8" style={{ fontSize: '11px' }} domain={['auto', 'auto']} />
