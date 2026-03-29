@@ -726,8 +726,9 @@ const FCPOTab = () => {
       const months = json.contract_months || [];
       const recentMonths = months.filter((m: string) => m >= '2025-01');
       setContractMonths(recentMonths);
-      const defaultSelected = recentMonths.filter((m: string) => m >= '2026-01' && m <= '2026-06').slice(0, 4);
-      setSelectedMonths(defaultSelected.length > 0 ? defaultSelected : recentMonths.slice(-4));
+      // 기본 선택: 2026년 전체 월 (1~12월)
+      const defaultSelected = recentMonths.filter((m: string) => m >= '2026-01' && m <= '2026-12');
+      setSelectedMonths(defaultSelected.length > 0 ? defaultSelected : recentMonths.slice(-6));
     } catch (error) {
       console.error('Failed to fetch FCPO data:', error);
     } finally {
@@ -1084,7 +1085,7 @@ const FCPOTab = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {fcpoData.slice(-20).map((row, idx) => (
+              {fcpoData.map((row, idx) => (
                 <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-5 py-3 font-medium text-slate-700 text-sm">{row.date}</td>
                   {selectedMonths.map((month) => (

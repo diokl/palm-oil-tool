@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
     try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
     const { searchParams } = new URL(request.url);
     const contractMonth = searchParams.get('contract_month');
-    const limit = parseInt(searchParams.get('limit') || '60');
+    const limit = parseInt(searchParams.get('limit') || '500');
 
     let query: string;
     let params: any[];
