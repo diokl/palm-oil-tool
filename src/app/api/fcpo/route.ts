@@ -16,29 +16,37 @@ export async function GET(request: NextRequest) {
       query = `SELECT * FROM fcpo_settlement WHERE contract_month = ? ORDER BY date DESC LIMIT ?`;
       params = [contractMonth, limit];
     } else {
-      // Get pivot table: dates as rows, contract months as columns
-      const dates = await dbAll(
-        `SELECT DISTINCT date FROM fcpo_settlement ORDER BY date DESC LIMIT ?`,
-        [limit]
-      ) as { date: string }[];
-
+      // Get contract months
       const months = await dbAll(
         `SELECT DISTINCT contract_month FROM fcpo_settlement ORDER BY contract_month`
       ) as { contract_month: string }[];
 
-      const pivotData = [];
-      for (const d of dates) {
-        const row: any = { date: d.date };
-        const prices = await dbAll(
-          `SELECT contract_month, settlement_myr, settlement_usd FROM fcpo_settlement WHERE date = ?`,
-          [d.date]
-        ) as any[];
-        for (const p of prices) {
-          row[`${p.contract_month}_myr`] = p.settlement_myr;
-          row[`${p.contract_month}_usd`] = p.settlement_usd;
+      // Get all data in a single query instead of N+1 queries
+      const allData = await dbAll(
+        `SELECT f.date, f.contract_month, f.settlement_myr, f.settlement_usd
+         FROM fcpo_settlement f
+         INNER JOIN (
+           SELECT DISTINCT date FROM fcpo_settlement ORDER BY date DESC LIMIT ?
+         ) d ON f.date = d.date
+         ORDER BY f.date DESC`,
+        [limit]
+      ) as any[];
+
+      // Pivot in JavaScript
+      const pivotMap = new Map<string, any>();
+      for (const row of allData) {
+        if (!pivotMap.has(row.date)) {
+          pivotMap.set(row.date, { date: row.date });
         }
-        pivotData.push(row);
+        const pivotRow = pivotMap.get(row.date);
+        pivotRow[`${row.contract_month}_myr`] = row.settlement_myr;
+        pivotRow[`${row.contract_month}_usd`] = row.settlement_usd;
       }
+
+      // Sort by date descending
+      const pivotData = Array.from(pivotMap.values()).sort(
+        (a, b) => b.date.localeCompare(a.date)
+      );
 
       return NextResponse.json({
         data: pivotData,
