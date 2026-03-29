@@ -1085,9 +1085,11 @@ const FCPOTab = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {fcpoData.map((row, idx) => (
+              {fcpoData
+                .filter((row) => selectedMonths.some((month) => row[`${month}_usd`]))
+                .map((row, idx) => (
                 <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
-                  <td className="px-5 py-3 font-medium text-slate-700 text-sm">{row.date}</td>
+                  <td className="px-5 py-3 font-medium text-slate-700 text-sm whitespace-nowrap">{row.date}</td>
                   {selectedMonths.map((month) => (
                     <td key={month} className="px-5 py-3 tabular-nums text-slate-600 text-right text-sm">
                       {row[`${month}_usd`] ? formatPrice(row[`${month}_usd`]) : '-'}
