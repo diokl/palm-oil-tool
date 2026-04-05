@@ -232,26 +232,32 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    const idsParam = searchParams.get('ids'); // 대량 삭제: comma-separated ids
+    const ids = searchParams.get('ids');
 
-    if (idsParam) {
-      // 대량 삭제
-      const ids = idsParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-      if (ids.length === 0) {
-        return NextResponse.json({ error: 'valid ids are required' }, { status: 400 });
+    if (id === 'all') {
+      // 전체 삭제
+      await dbRun('DELETE FROM news');
+      return NextResponse.json({ success: true, message: 'All news deleted' });
+    }
+
+    if (ids) {
+      // 다건 삭제: ids=1,2,3
+      const idList = ids.split(',').map(i => parseInt(i.trim())).filter(i => !isNaN(i));
+      if (idList.length === 0) {
+        return NextResponse.json({ error: 'No valid ids provided' }, { status: 400 });
       }
-      const placeholders = ids.map(() => '?').join(',');
-      await dbRun(`DELETE FROM news WHERE id IN (${placeholders})`, ids);
-      return NextResponse.json({ success: true, deleted: ids.length });
+      const placeholders = idList.map(() => '?').join(',');
+      await dbRun(`DELETE FROM news WHERE id IN (${placeholders})`, idList);
+      return NextResponse.json({ success: true, deleted: idList.length });
     }
 
     if (!id) {
-      return NextResponse.json({ error: 'id or ids is required' }, { status: 400 });
+      return NextResponse.json({ error: 'id, ids, or id=all is required' }, { status: 400 });
     }
+
     await dbRun('DELETE FROM news WHERE id = ?', [parseInt(id)]);
-    return NextResponse.json({ success: true, deleted: 1 });
+    return NextResponse.json({ success: true });
   } catch (error: any) {
-    console.error('News DELETE error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
