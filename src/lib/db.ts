@@ -67,6 +67,7 @@ async function initializeDbSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       date TEXT NOT NULL,
       content TEXT NOT NULL,
+      full_content TEXT,
       sentiment TEXT CHECK(sentiment IN ('강세', '약세', '보합')),
       impact TEXT CHECK(impact IN ('High', 'Medium', 'Low')),
       created_at TEXT DEFAULT (datetime('now')),

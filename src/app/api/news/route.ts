@@ -1,14 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
+import Anthropic from '@anthropic-ai/sdk';
 
-// AI로 뉴스 sentiment/impact 판단
+// Ensure full_content column exists (migration-safe)
+async function ensureFullContentColumn() {
+  try {
+    const tableInfo = await dbAll("PRAGMA table_info(news)");
+    const columns = tableInfo.map((row: any) => row.name);
+    if (!columns.includes('full_content')) {
+      await dbRun('ALTER TABLE news ADD COLUMN full_content TEXT');
+    }
+  } catch (e) {
+    console.warn('full_content column migration skipped:', (e as Error).message);
+  }
+}
+
+// AI로 뉴스 sentiment/impact 판단 (단건)
 async function analyzeNewsWithAI(content: string): Promise<{ sentiment: string; impact: string }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return { sentiment: '보합', impact: 'Medium' };
 
   try {
-    const Anthropic = (await import('@anthropic-ai/sdk')).default;
     const client = new Anthropic({ apiKey });
 
     const response = await client.messages.create({
@@ -46,9 +59,90 @@ async function analyzeNewsWithAI(content: string): Promise<{ sentiment: string; 
   return { sentiment: '보합', impact: 'Medium' };
 }
 
+// Claude API로 대량 텍스트를 기사 단위로 파싱 + 시황/영향도 분석
+async function parseBulkNewsWithAI(rawText: string): Promise<Array<{
+  date: string;
+  title: string;
+  full_content: string;
+  sentiment: string;
+  impact: string;
+}>> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY가 설정되지 않았습니다');
+
+  const client = new Anthropic({ apiKey });
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 4096,
+    messages: [{
+      role: 'user',
+      content: `당신은 팜유/유지류 시황 뉴스 전문 파서입니다.
+
+아래 텍스트에서 개별 뉴스 기사를 분리하고 각각에 대해 분석해주세요.
+
+**텍스트:**
+${rawText}
+
+**각 기사별로 추출할 항목:**
+1. date: 기사의 실제 날짜 (YYYY-MM-DD 형식). 본문에서 날짜를 찾아주세요 (예: "2026.03.31", "[03/31]", "3월 30일" 등). 올해는 2026년입니다.
+2. title: 기사 제목 또는 핵심 요약 (1줄, 50자 이내)
+3. full_content: 해당 기사의 전체 내용 (원문 그대로, 줄바꿈 포함)
+4. sentiment: 팜유 가격 전망 - "강세"(상승 요인), "약세"(하락 요인), "보합"(중립)
+5. impact: 영향도 - "High"(직접적/큰 영향), "Medium"(간접적/보통), "Low"(미미)
+
+**sentiment 판단 기준:**
+- B50 도입, 수출 증가, 생산량 감소, 유가 상승, 재고 감소 → 강세
+- 수출세 인하, 생산량 증가, 재고 증가, 수요 감소 → 약세
+- 혼재된 요인, 정책 변경 관망 → 보합
+
+**반드시 아래 JSON 배열만 반환하세요 (다른 텍스트 없이):**
+[
+  {
+    "date": "2026-03-31",
+    "title": "인도네시아 B50 재도입 기대감에 팜유 상승",
+    "full_content": "전체 기사 내용...",
+    "sentiment": "강세",
+    "impact": "High"
+  }
+]`
+    }],
+  });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+
+  // JSON 추출
+  let jsonStr = text;
+  const codeMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeMatch) {
+    jsonStr = codeMatch[1].trim();
+  } else {
+    const arrMatch = text.match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      jsonStr = arrMatch[0];
+    }
+  }
+
+  const parsed = JSON.parse(jsonStr);
+
+  // Validate and clean
+  const validSentiments = ['강세', '약세', '보합'];
+  const validImpacts = ['High', 'Medium', 'Low'];
+
+  return parsed.map((item: any) => ({
+    date: item.date || new Date().toISOString().slice(0, 10),
+    title: item.title || item.full_content?.substring(0, 50) || '',
+    full_content: item.full_content || '',
+    sentiment: validSentiments.includes(item.sentiment) ? item.sentiment : '보합',
+    impact: validImpacts.includes(item.impact) ? item.impact : 'Medium',
+  }));
+}
+
 export async function GET(request: NextRequest) {
   try {
     try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
+    try { await ensureFullContentColumn(); } catch (e: any) { console.warn('Migration skipped:', e.message); }
+
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get('limit') || '30');
 
@@ -67,17 +161,35 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { date, content, sentiment, impact, created_by, auto_analyze } = body;
+    try { await ensureFullContentColumn(); } catch (e: any) { console.warn('Migration skipped:', e.message); }
 
-    // 대량 업로드 모드
+    const body = await request.json();
+
+    // 대량 업로드 모드 — Claude API로 기사 파싱
+    if (body.bulk_text && typeof body.bulk_text === 'string') {
+      const articles = await parseBulkNewsWithAI(body.bulk_text);
+      const results = [];
+
+      for (const article of articles) {
+        await dbRun(
+          `INSERT INTO news (date, content, full_content, sentiment, impact, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
+          [article.date, article.title, article.full_content, article.sentiment, article.impact, 'bulk_upload']
+        );
+        const id = await dbLastId();
+        results.push({ id, date: article.date, content: article.title, sentiment: article.sentiment, impact: article.impact });
+      }
+
+      return NextResponse.json({ success: true, count: results.length, results });
+    }
+
+    // 레거시 대량 업로드 (이전 형식 호환)
     if (body.bulk_items && Array.isArray(body.bulk_items)) {
       const results = [];
       for (const item of body.bulk_items) {
         const aiResult = await analyzeNewsWithAI(item.content);
         await dbRun(
-          `INSERT INTO news (date, content, sentiment, impact, created_by) VALUES (?, ?, ?, ?, ?)`,
-          [item.date, item.content, aiResult.sentiment, aiResult.impact, 'bulk_upload']
+          `INSERT INTO news (date, content, full_content, sentiment, impact, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
+          [item.date, item.content, item.full_content || null, aiResult.sentiment, aiResult.impact, 'bulk_upload']
         );
         const id = await dbLastId();
         results.push({ id, content: item.content, ...aiResult });
@@ -85,19 +197,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, count: results.length, results });
     }
 
-    // 단건 입력 — AI 자동 판단 모드
+    // 단건 입력
+    const { date, content, full_content, sentiment, impact, created_by, auto_analyze } = body;
+
     let finalSentiment = sentiment;
     let finalImpact = impact;
 
     if (auto_analyze || (!sentiment && !impact)) {
-      const aiResult = await analyzeNewsWithAI(content);
+      const aiResult = await analyzeNewsWithAI(full_content || content);
       finalSentiment = aiResult.sentiment;
       finalImpact = aiResult.impact;
     }
 
     await dbRun(
-      `INSERT INTO news (date, content, sentiment, impact, created_by) VALUES (?, ?, ?, ?, ?)`,
-      [date, content, finalSentiment || '보합', finalImpact || 'Medium', created_by || 'user']
+      `INSERT INTO news (date, content, full_content, sentiment, impact, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
+      [date, content, full_content || null, finalSentiment || '보합', finalImpact || 'Medium', created_by || 'user']
     );
 
     const id = await dbLastId();
@@ -109,6 +223,7 @@ export async function POST(request: NextRequest) {
       impact: finalImpact,
     });
   } catch (error: any) {
+    console.error('News POST error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

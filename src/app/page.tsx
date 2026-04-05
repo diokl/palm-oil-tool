@@ -180,6 +180,7 @@ interface NewsItem {
   id: number;
   date: string;
   content: string;
+  full_content?: string;
   sentiment: string;
   impact: string;
   created_by?: string;
@@ -1946,51 +1947,16 @@ const NewsTab = () => {
     }
   };
 
-  // 대량 텍스트 업로드
+  // 대량 텍스트 업로드 — Claude API가 기사 단위로 파싱 + 시황/영향도 분석
   const handleBulkUpload = async () => {
     if (!bulkText.trim()) return;
     setBulkSaving(true);
     setBulkResults(null);
     try {
-      // 텍스트 파싱: "번호, 거래소, 제목, 날짜" 또는 줄별 자유 형식
-      const lines = bulkText.split('\n').filter(l => l.trim());
-      const parsedItems: { date: string; content: string }[] = [];
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        // 패턴 1: "번호, 거래소, 제목, 날짜" (쉼표 구분)
-        const csvMatch = trimmed.match(/^\d+\s*[,\t]\s*([^,\t]+)\s*[,\t]\s*(.+?)\s*[,\t]\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*$/);
-        if (csvMatch) {
-          const exchange = csvMatch[1].trim();
-          const title = csvMatch[2].trim();
-          const date = csvMatch[3].replace(/[/.]/g, '-');
-          parsedItems.push({ date, content: `[${exchange}] ${title}` });
-          continue;
-        }
-
-        // 패턴 2: "날짜 + 내용" (날짜가 앞에)
-        const dateFirstMatch = trimmed.match(/^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*[,:\-\t]\s*(.+)$/);
-        if (dateFirstMatch) {
-          parsedItems.push({ date: dateFirstMatch[1].replace(/[/.]/g, '-'), content: dateFirstMatch[2].trim() });
-          continue;
-        }
-
-        // 패턴 3: 날짜 없는 순수 텍스트 → 오늘 날짜
-        parsedItems.push({ date: new Date().toISOString().slice(0, 10), content: trimmed });
-      }
-
-      if (parsedItems.length === 0) {
-        alert('파싱할 수 있는 뉴스 항목이 없습니다.');
-        setBulkSaving(false);
-        return;
-      }
-
       const res = await fetch('/api/news', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bulk_items: parsedItems }),
+        body: JSON.stringify({ bulk_text: bulkText }),
       });
 
       const json = await res.json();
@@ -2001,10 +1967,13 @@ const NewsTab = () => {
           setBulkText('');
           setBulkResults(null);
           fetchNews();
-        }, 3000);
+        }, 5000);
+      } else {
+        alert(`업로드 실패: ${json.error || '알 수 없는 오류'}`);
       }
     } catch (error) {
       console.error('Bulk upload failed:', error);
+      alert('업로드 중 오류가 발생했습니다.');
     } finally {
       setBulkSaving(false);
     }
@@ -2119,20 +2088,15 @@ const NewsTab = () => {
             <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 font-medium">AI 자동 분석</span>
           </div>
           <div className="text-xs text-slate-400 space-y-1">
-            <p>아래 형식으로 여러 뉴스를 한번에 입력하세요. 각 항목마다 AI가 시황/영향도를 자동 판단합니다.</p>
-            <div className="bg-white rounded p-2 font-mono text-slate-500 border border-slate-200">
-              <p>1, BMD, Palm oil rises on strong demand, 2024-03-23</p>
-              <p>2, CBOT, Soybean futures fall sharply, 2024-03-22</p>
-              <p>2024-03-21, 인도네시아 B50 바이오디젤 정책 시행 확정</p>
-              <p>말레이시아 재고 3개월 연속 감소 추세</p>
-            </div>
+            <p>시황 뉴스 전체 내용을 그대로 붙여넣으세요. AI가 기사를 자동 분리하고, 날짜 추출 + 시황/영향도를 분석합니다.</p>
+            <p className="text-violet-500">여러 기사를 한번에 붙여넣어도 자동으로 분리됩니다.</p>
           </div>
           <div>
             <textarea
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
-              placeholder="뉴스 목록을 붙여넣으세요..."
-              rows={8}
+              placeholder="시황 뉴스 전체 내용을 그대로 붙여넣으세요... (예: [03/31] 인도네시아 B50 재도입 기대감에 팜유 상승...)"
+              rows={12}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white resize-none font-mono"
             />
           </div>
@@ -2145,6 +2109,7 @@ const NewsTab = () => {
                     r.sentiment === '강세' ? 'bg-emerald-500' : r.sentiment === '약세' ? 'bg-rose-500' : 'bg-slate-400'
                   }`}>{r.sentiment}</span>
                   <span className="text-slate-400">{r.impact}</span>
+                  <span className="text-slate-400">{r.date}</span>
                   <span className="text-slate-600 truncate flex-1">{r.content}</span>
                 </div>
               ))}
@@ -2152,7 +2117,7 @@ const NewsTab = () => {
           )}
           <div className="flex justify-end gap-2">
             <span className="text-xs text-slate-400 self-center">
-              {bulkText.split('\n').filter(l => l.trim()).length}개 라인 감지
+              AI가 기사를 자동 분리합니다
             </span>
             <button
               onClick={handleBulkUpload}
@@ -2285,7 +2250,7 @@ const NewsTab = () => {
                             <div className="border-t border-slate-100 bg-slate-50/30 p-4 space-y-3 animate-fade-in">
                               <div>
                                 <p className="text-xs font-medium text-slate-500 mb-1">전체 내용</p>
-                                <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{news.content}</p>
+                                <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{news.full_content || news.content}</p>
                               </div>
                               <div className="grid grid-cols-3 gap-3">
                                 <div>
