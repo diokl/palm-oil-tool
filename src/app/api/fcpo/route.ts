@@ -67,8 +67,13 @@ export async function POST(request: NextRequest) {
     const { date, contract_month, settlement_myr, settlement_usd, exchange_rate, source } = body;
 
     await dbRun(
-      `INSERT OR REPLACE INTO fcpo_settlement (date, contract_month, settlement_myr, settlement_usd, exchange_rate, source)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO fcpo_settlement (date, contract_month, settlement_myr, settlement_usd, exchange_rate, source)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (date, contract_month) DO UPDATE SET
+         settlement_myr = EXCLUDED.settlement_myr,
+         settlement_usd = EXCLUDED.settlement_usd,
+         exchange_rate = EXCLUDED.exchange_rate,
+         source = EXCLUDED.source`,
       [date, contract_month, settlement_myr, settlement_usd, exchange_rate, source || 'manual']
     );
 

@@ -44,7 +44,7 @@ export async function PUT(request: NextRequest) {
     const oldValue = current[field];
 
     // Update the field
-    await dbRun(`UPDATE inventory SET ${field} = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`,
+    await dbRun(`UPDATE inventory SET ${field} = ?, updated_at = NOW(), updated_by = ? WHERE id = ?`,
       [value, edited_by || 'user', id]);
 
     // Log the edit

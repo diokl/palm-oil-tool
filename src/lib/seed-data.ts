@@ -49,8 +49,9 @@ export async function seedInitialData() {
 
     // Import FCPO price data in batches
     const priceOps = priceData.map(p => ({
-      sql: `INSERT OR IGNORE INTO fcpo_settlement (date, contract_month, settlement_usd, source)
-            VALUES (?, ?, ?, 'excel_import')`,
+      sql: `INSERT INTO fcpo_settlement (date, contract_month, settlement_usd, source)
+            VALUES (?, ?, ?, 'excel_import')
+            ON CONFLICT (date, contract_month) DO NOTHING`,
       params: [p.date, p.contract_month, p.settlement_usd]
     }));
 
@@ -74,8 +75,9 @@ export async function seedInitialData() {
       if (!inventoryKeys.has(key)) {
         inventoryKeys.add(key);
         inventoryOps.push({
-          sql: `INSERT OR IGNORE INTO inventory (product, year, month, updated_by)
-                VALUES (?, ?, ?, 'excel_import')`,
+          sql: `INSERT INTO inventory (product, year, month, updated_by)
+                VALUES (?, ?, ?, 'excel_import')
+                ON CONFLICT (product, year, month) DO NOTHING`,
           params: [record.product, record.year, record.month]
         });
       }
@@ -99,7 +101,7 @@ export async function seedInitialData() {
       }
 
       updateOps.push({
-        sql: `UPDATE inventory SET ${fieldName} = ?, updated_by = 'excel_import', updated_at = datetime('now')
+        sql: `UPDATE inventory SET ${fieldName} = ?, updated_by = 'excel_import', updated_at = NOW()
               WHERE product = ? AND year = ? AND month = ?`,
         params: [record.value, record.product, record.year, record.month]
       });

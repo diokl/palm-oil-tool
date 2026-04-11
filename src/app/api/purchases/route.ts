@@ -2,26 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun, dbGet, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 
-// Ensure extended columns exist (migration-safe)
+// Ensure extended columns exist (migration-safe).
+// No-op under PostgreSQL/Supabase: schema is managed out-of-band via schema.sql.
 async function ensureExtendedColumns() {
-  const tableInfo = await dbAll("PRAGMA table_info(purchases)");
-  if (tableInfo.length > 0) {
-    const columns = tableInfo.map((row: any) => row.name);
-    const newCols: [string, string][] = [
-      ['incoterms', 'TEXT'],
-      ['payment_terms', 'TEXT'],
-      ['loading_port', 'TEXT'],
-      ['discharge_port', 'TEXT'],
-      ['contract_number', 'TEXT'],
-    ];
-    for (const [col, type] of newCols) {
-      if (!columns.includes(col)) {
-        try {
-          await dbRun(`ALTER TABLE purchases ADD COLUMN ${col} ${type}`);
-        } catch { /* column may already exist */ }
-      }
-    }
-  }
+  return;
 }
 
 export async function GET() {

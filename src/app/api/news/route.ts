@@ -3,17 +3,10 @@ import { dbAll, dbRun, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import Anthropic from '@anthropic-ai/sdk';
 
-// Ensure full_content column exists (migration-safe)
+// Ensure full_content column exists (migration-safe).
+// No-op under PostgreSQL/Supabase: schema is managed out-of-band via schema.sql.
 async function ensureFullContentColumn() {
-  try {
-    const tableInfo = await dbAll("PRAGMA table_info(news)");
-    const columns = tableInfo.map((row: any) => row.name);
-    if (!columns.includes('full_content')) {
-      await dbRun('ALTER TABLE news ADD COLUMN full_content TEXT');
-    }
-  } catch (e) {
-    console.warn('full_content column migration skipped:', (e as Error).message);
-  }
+  return;
 }
 
 // AI로 뉴스 sentiment/impact 판단 (단건)
@@ -208,7 +201,7 @@ export async function GET(request: NextRequest) {
 
     // Sentiment summary
     const recent = await dbAll(
-      `SELECT sentiment, COUNT(*) as cnt FROM news WHERE date >= date('now', '-7 days') GROUP BY sentiment`
+      `SELECT sentiment, COUNT(*) as cnt FROM news WHERE date::date >= (CURRENT_DATE - INTERVAL '7 days') GROUP BY sentiment`
     ) as { sentiment: string; cnt: number }[];
 
     return NextResponse.json({ data, sentiment_summary: recent });

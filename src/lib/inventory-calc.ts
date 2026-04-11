@@ -26,7 +26,7 @@ export async function recalcInventory(product: 'RBD' | 'RSPO', year: number, pre
     const coverageDays = usage > 0 ? Math.round((endingStock / usage) * 10) / 10 : 0;
 
     await dbRun(
-      `UPDATE inventory SET ending_stock = ?, coverage_days = ?, updated_at = datetime('now') WHERE id = ?`,
+      `UPDATE inventory SET ending_stock = ?, coverage_days = ?, updated_at = NOW() WHERE id = ?`,
       [endingStock, coverageDays, row.id]
     );
     prevStock = endingStock;
