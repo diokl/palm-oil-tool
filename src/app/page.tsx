@@ -752,7 +752,7 @@ const FCPOTab = () => {
       const json = await res.json();
       if (json.success) {
         setBmdResult(json);
-        setBmdMessage(`${json.report_date} BMD 데이터: RBD Palm Oil ${json.rbd_palm_oil?.length || 0}건, FCPO ${json.fcpo_usd?.length || 0}건`);
+        setBmdMessage(`${json.report_date} BMD 데이터: RBD Palm Oil ${json.rbd_palm_oil?.length || 0}건`);
       } else {
         setBmdMessage(`파싱 실패: ${json.error || '알 수 없는 오류'}`);
       }
@@ -785,23 +785,6 @@ const FCPOTab = () => {
             settlement_myr: exchangeRate ? Math.round(item.ask * exchangeRate * 100) / 100 : null,
             exchange_rate: exchangeRate,
             source: 'bmd_pdf_rbd',
-          }),
-        });
-        saved++;
-      }
-
-      // FCPO USD 가격도 저장 (별도 소스 태그)
-      for (const item of (bmdResult.fcpo_usd || [])) {
-        await fetch('/api/fcpo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            date,
-            contract_month: item.contract_month,
-            settlement_usd: item.last_done_trade,
-            settlement_myr: exchangeRate ? Math.round(item.last_done_trade * exchangeRate * 100) / 100 : null,
-            exchange_rate: exchangeRate,
-            source: 'bmd_pdf_fcpo',
           }),
         });
         saved++;
@@ -989,35 +972,6 @@ const FCPOTab = () => {
               </div>
             )}
 
-            {/* FCPO USD */}
-            {bmdResult.fcpo_usd?.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-emerald-700 mb-1">FCPO (USD/MT) — Last Done Trade</p>
-                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-                  {bmdResult.fcpo_usd.map((item: any, i: number) => (
-                    <div key={i} className="bg-white rounded-lg p-2 border border-emerald-200 text-center">
-                      <p className="text-[10px] text-slate-500">{item.contract_month}</p>
-                      <p className="text-sm font-bold text-emerald-800">${item.last_done_trade}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* RBD Palm Olein */}
-            {bmdResult.rbd_palm_olein?.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-amber-700 mb-1">RBD PALM OLEIN (USD/MT) — ASK</p>
-                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-                  {bmdResult.rbd_palm_olein.map((item: any, i: number) => (
-                    <div key={i} className="bg-white rounded-lg p-2 border border-amber-200 text-center">
-                      <p className="text-[10px] text-slate-500">{item.contract_month}</p>
-                      <p className="text-sm font-bold text-amber-800">${item.ask}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 

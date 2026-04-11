@@ -5,43 +5,38 @@ interface ParsedBMDData {
   report_date: string;
   exchange_rate: number | null;
   rbd_palm_oil: Array<{ month: string; contract_month: string; ask: number }>;
-  rbd_palm_olein: Array<{ month: string; contract_month: string; ask: number; bid: number | null; values: number | null }>;
-  fcpo_usd: Array<{ month: string; contract_month: string; last_done_trade: number }>;
-  cpo_myr: Array<{ month: string; contract_month: string; ask: number; bid: number | null }>;
 }
 
 const EXTRACTION_PROMPT = `You are a BMD (Bursa Malaysia Derivatives) market data extractor.
-Analyze this PDF and extract the following data in EXACT JSON format.
+Analyze this PDF and extract ONLY the "RBD PALM OIL" physical section (NOT "RBD PALM OLEIN",
+NOT "RBD PALM STEARIN", NOT "RBD PALM KERNEL OIL", NOT "FCPO", NOT "CPO in Ringgit").
 
-Extract:
+The target section is the standalone header literally spelled "RBD PALM OIL" that lists
+ASK prices with RIC codes in the form <PO-MYRBD-M1> ... <PO-MYRBD-Q3>. Use the RIC codes
+as the primary signal to locate the correct section — if a row's RIC does not start with
+"PO-MYRBD-", ignore it.
+
+Extract in EXACT JSON format:
 1. report_date: The report date in "YYYY-MM-DD" format
-2. exchange_rate: The Ringgit/USD exchange rate (number)
-3. rbd_palm_oil: Array of RBD PALM OIL entries. For each month, extract:
-   - month: month name as shown (e.g. "Apr", "May", "Jun", "Jul/Aug/Sep")
-   - contract_month: in "YYYY-MM" format (use the first month for quarter contracts)
+2. exchange_rate: The Malaysian Ringgit/USD exchange rate (number, or null if missing)
+3. rbd_palm_oil: Array of entries from the RBD PALM OIL section only. For each row:
+   - month: month label as shown (e.g. "April", "May", "Jun", "Jul/Aug/Sep")
+   - contract_month: in "YYYY-MM" format (use the FIRST month for quarter contracts)
    - ask: the ASK price (number, USD/MT)
-4. rbd_palm_olein: Array of RBD PALM OLEIN entries with:
-   - month, contract_month, ask, bid (number or null), values (number or null)
-5. fcpo_usd: Array of Bursa Malaysia FCPO USD entries with:
-   - month, contract_month, last_done_trade (number)
-6. cpo_myr: Array of Malaysian Crude Palm Oil in Ringgit entries with:
-   - month, contract_month, ask, bid (number or null)
 
 Rules:
-- Prices are typically between 500-3000 USD/MT or MYR/MT
+- Prices are typically between 500-3000 USD/MT
 - For quarter contracts like "Jul/Aug/Sep", use the first month for contract_month
-- For months Jan-Mar, they likely belong to the NEXT year
-- If a value is "N/A", "-", or missing, use null
+- For months Jan-Mar, they belong to the NEXT year relative to the report date
+- If ASK is "N/A", "-", or missing, skip that row entirely
+- Do NOT include any other palm oil products, even if they contain "PALM" or "OIL" in the name
 - Return ONLY valid JSON, no markdown, no explanation
 
 Return exactly this JSON structure:
 {
   "report_date": "YYYY-MM-DD",
   "exchange_rate": number,
-  "rbd_palm_oil": [...],
-  "rbd_palm_olein": [...],
-  "fcpo_usd": [...],
-  "cpo_myr": [...]
+  "rbd_palm_oil": [...]
 }`;
 
 export async function POST(request: NextRequest) {
