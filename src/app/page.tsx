@@ -752,7 +752,8 @@ const FCPOTab = () => {
       const json = await res.json();
       if (json.success) {
         setBmdResult(json);
-        setBmdMessage(`${json.report_date} BMD 데이터: RBD Palm Oil ${json.rbd_palm_oil?.length || 0}건`);
+        const warnSuffix = json.warnings?.length ? ` (경고 ${json.warnings.length}건)` : '';
+        setBmdMessage(`${json.report_date} BMD 데이터: RBD Palm Oil ${json.rbd_palm_oil?.length || 0}건${warnSuffix}`);
       } else {
         setBmdMessage(`파싱 실패: ${json.error || '알 수 없는 오류'}`);
       }
@@ -957,10 +958,21 @@ const FCPOTab = () => {
               </div>
             </div>
 
+            {/* 파싱 경고 (RIC 누락 등) */}
+            {bmdResult.warnings?.length > 0 && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-2">
+                {bmdResult.warnings.map((w: string, i: number) => (
+                  <p key={i} className="text-xs text-amber-800">⚠ {w}</p>
+                ))}
+              </div>
+            )}
+
             {/* RBD Palm Oil */}
             {bmdResult.rbd_palm_oil?.length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-blue-700 mb-1">RBD PALM OIL (USD/MT) — ASK</p>
+                <p className="text-xs font-semibold text-blue-700 mb-1">
+                  RBD PALM OIL (USD/MT) — ASK · {bmdResult.rbd_palm_oil.length}건
+                </p>
                 <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
                   {bmdResult.rbd_palm_oil.map((item: any, i: number) => (
                     <div key={i} className="bg-white rounded-lg p-2 border border-blue-200 text-center">

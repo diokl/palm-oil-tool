@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 
+interface ParsedBMDRow {
+  month: string;
+  contract_month: string;
+  ask: number;
+  ric?: string;
+}
+
 interface ParsedBMDData {
   report_date: string;
   exchange_rate: number | null;
-  rbd_palm_oil: Array<{ month: string; contract_month: string; ask: number }>;
+  rbd_palm_oil: ParsedBMDRow[];
+  warnings?: string[];
 }
 
 const EXTRACTION_PROMPT = `You are a BMD (Bursa Malaysia Derivatives) market data extractor.
@@ -16,19 +24,34 @@ ASK prices with RIC codes in the form <PO-MYRBD-M1> ... <PO-MYRBD-Q3>. Use the R
 as the primary signal to locate the correct section — if a row's RIC does not start with
 "PO-MYRBD-", ignore it.
 
+CRITICAL: The RBD PALM OIL table has EXACTLY 6 rows with these RIC codes in order:
+  1. PO-MYRBD-M1  (first near month, e.g. "April")
+  2. PO-MYRBD-M2  (second near month, e.g. "May")
+  3. PO-MYRBD-M3  (third near month, e.g. "June")
+  4. PO-MYRBD-Q1  (first forward quarter, label "Jul/Aug/Sep")
+  5. PO-MYRBD-Q2  (second forward quarter, label "Oct/Nov/Dec")
+  6. PO-MYRBD-Q3  (third forward quarter, label "Jan/Feb/Mar")
+
+The RBD PALM OIL table frequently spans a page break — the "RBD PALM OIL" header and the
+FIRST row (M1) often appear at the bottom of one page while the remaining rows continue on
+the next page. You MUST scan BOTH pages and return ALL 6 rows. Before finalizing your JSON,
+verify your rbd_palm_oil array contains exactly 6 entries with RIC codes M1, M2, M3, Q1, Q2, Q3.
+If the first row (M1) is only visible at the very bottom of a page, do not skip it.
+
 Extract in EXACT JSON format:
 1. report_date: The report date in "YYYY-MM-DD" format
 2. exchange_rate: The Malaysian Ringgit/USD exchange rate (number, or null if missing)
-3. rbd_palm_oil: Array of entries from the RBD PALM OIL section only. For each row:
-   - month: month label as shown (e.g. "April", "May", "Jun", "Jul/Aug/Sep")
-   - contract_month: in "YYYY-MM" format (use the FIRST month for quarter contracts)
+3. rbd_palm_oil: Array of 6 entries from the RBD PALM OIL section. For each row return:
+   - month: month label as shown (e.g. "April", "May", "June", "Jul/Aug/Sep", "Oct/Nov/Dec", "Jan/Feb/Mar")
+   - contract_month: "YYYY-MM" using the FIRST month of the label (server will expand quarters later)
    - ask: the ASK price (number, USD/MT)
+   - ric: the RIC code exactly as shown without angle brackets (e.g. "PO-MYRBD-M1")
 
 Rules:
 - Prices are typically between 500-3000 USD/MT
-- For quarter contracts like "Jul/Aug/Sep", use the first month for contract_month
-- For months Jan-Mar, they belong to the NEXT year relative to the report date
-- If ASK is "N/A", "-", or missing, skip that row entirely
+- For quarter contracts like "Jul/Aug/Sep", contract_month uses the first month (e.g. "2026-07")
+- For Jan/Feb/Mar rows, they belong to the NEXT year relative to the report date
+- If ASK is truly "N/A", "-", or blank, skip that row entirely (but this is rare — usually all 6 have ASK)
 - Do NOT include any other palm oil products, even if they contain "PALM" or "OIL" in the name
 - Return ONLY valid JSON, no markdown, no explanation
 
@@ -38,6 +61,61 @@ Return exactly this JSON structure:
   "exchange_rate": number,
   "rbd_palm_oil": [...]
 }`;
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// 분기 row(Q1~Q3)를 3개월로 펼친다. 예) "2026-07" 1195 → 2026-07, 2026-08, 2026-09
+// Q3 (Jan/Feb/Mar)는 연도가 다음 해로 넘어가므로 contract_month에 이미 반영돼 있어야 한다.
+function expandQuarterRows(rows: ParsedBMDRow[]): ParsedBMDRow[] {
+  const expanded: ParsedBMDRow[] = [];
+  for (const row of rows) {
+    const isQuarter = (row.ric && /-Q[1-3]$/.test(row.ric)) || /\//.test(row.month);
+    if (!isQuarter) {
+      expanded.push({ month: row.month, contract_month: row.contract_month, ask: row.ask, ric: row.ric });
+      continue;
+    }
+    const m = row.contract_month.match(/^(\d{4})-(\d{2})$/);
+    if (!m) {
+      // contract_month 형식이 이상하면 그냥 원본 유지
+      expanded.push(row);
+      continue;
+    }
+    let year = parseInt(m[1], 10);
+    let month = parseInt(m[2], 10);
+    for (let i = 0; i < 3; i++) {
+      const cm = `${year}-${String(month).padStart(2, '0')}`;
+      expanded.push({
+        month: MONTH_NAMES[month - 1],
+        contract_month: cm,
+        ask: row.ask,
+        ric: row.ric,
+      });
+      month += 1;
+      if (month > 12) { month = 1; year += 1; }
+    }
+  }
+  return expanded;
+}
+
+const EXPECTED_RICS = [
+  'PO-MYRBD-M1', 'PO-MYRBD-M2', 'PO-MYRBD-M3',
+  'PO-MYRBD-Q1', 'PO-MYRBD-Q2', 'PO-MYRBD-Q3',
+];
+
+function validateRics(rows: ParsedBMDRow[]): string[] {
+  const warnings: string[] = [];
+  const foundRics = new Set(
+    rows.map((r) => (r.ric || '').replace(/[<>]/g, '').trim()).filter(Boolean)
+  );
+  const missing = EXPECTED_RICS.filter((r) => !foundRics.has(r));
+  if (missing.length > 0) {
+    warnings.push(`RBD PALM OIL 섹션에서 다음 RIC를 찾지 못했습니다: ${missing.join(', ')}`);
+  }
+  return warnings;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -109,9 +187,22 @@ export async function POST(request: NextRequest) {
 
     const parsed: ParsedBMDData = JSON.parse(jsonStr);
 
+    // 1) RIC 6종(M1~M3, Q1~Q3)이 다 있는지 검증 → 누락 있으면 warnings에 담아서 전달
+    const rawRows = Array.isArray(parsed.rbd_palm_oil) ? parsed.rbd_palm_oil : [];
+    const warnings = validateRics(rawRows);
+
+    // 2) 분기 row(Q1/Q2/Q3)를 3개월로 펼침. 일반 월 row는 그대로 유지.
+    //    예) Jul/Aug/Sep 1195 → 2026-07, 2026-08, 2026-09 세 건이 각각 1195로 저장됨.
+    //    Q3(Jan/Feb/Mar)는 Claude가 이미 다음 해 연도로 contract_month를 만들어 주므로
+    //    expandQuarterRows 내부의 month+1 롤오버 로직이 자동으로 처리한다.
+    const expanded = expandQuarterRows(rawRows);
+
     return NextResponse.json({
       success: true,
-      ...parsed,
+      report_date: parsed.report_date,
+      exchange_rate: parsed.exchange_rate,
+      rbd_palm_oil: expanded,
+      warnings: warnings.length > 0 ? warnings : undefined,
       raw_text: `[Claude API로 추출] 파일: ${file.name}, 모델: claude-sonnet-4-20250514`,
     });
   } catch (error: any) {
