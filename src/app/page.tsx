@@ -2943,6 +2943,7 @@ interface MpobRow {
   parent_group: string | null;
   sort_order: number;
   months: { [month: number]: { value: number | null; value_rm: number | null } };
+  prevYear: { [month: number]: { value: number | null; value_rm: number | null } };
 }
 
 const MPOBTab = () => {
@@ -2976,31 +2977,46 @@ const MPOBTab = () => {
     } catch {}
   };
 
+  const parseMpobRows = (rows: any[], prevRows: any[]): MpobRow[] => {
+    const itemMap = new Map<string, MpobRow>();
+    for (const r of rows) {
+      if (!itemMap.has(r.item_name)) {
+        itemMap.set(r.item_name, {
+          item_name: r.item_name, parent_group: r.parent_group,
+          sort_order: r.sort_order, months: {}, prevYear: {},
+        });
+      }
+      itemMap.get(r.item_name)!.months[r.month] = {
+        value: r.value != null ? Number(r.value) : null,
+        value_rm: r.value_rm != null ? Number(r.value_rm) : null,
+      };
+    }
+    for (const r of prevRows) {
+      if (!itemMap.has(r.item_name)) continue;
+      itemMap.get(r.item_name)!.prevYear[r.month] = {
+        value: r.value != null ? Number(r.value) : null,
+        value_rm: r.value_rm != null ? Number(r.value_rm) : null,
+      };
+    }
+    return Array.from(itemMap.values()).sort((a, b) => a.sort_order - b.sort_order);
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
+      const prevYear = year - 1;
+      // Fetch all categories in parallel (current year + previous year)
+      const fetches = categoriesToFetch.flatMap(cat => [
+        fetch(`/api/mpob?category=${cat}&year=${year}`).then(r => r.json()).then(j => ({ cat, year: year, data: j.data || [] })),
+        fetch(`/api/mpob?category=${cat}&year=${prevYear}`).then(r => r.json()).then(j => ({ cat, year: prevYear, data: j.data || [] })),
+      ]);
+      const allResults = await Promise.all(fetches);
+
       const results: Record<string, MpobRow[]> = {};
       for (const cat of categoriesToFetch) {
-        const res = await fetch(`/api/mpob?category=${cat}&year=${year}`);
-        const json = await res.json();
-        const rows: any[] = json.data || [];
-        // Group by item
-        const itemMap = new Map<string, MpobRow>();
-        for (const r of rows) {
-          if (!itemMap.has(r.item_name)) {
-            itemMap.set(r.item_name, {
-              item_name: r.item_name,
-              parent_group: r.parent_group,
-              sort_order: r.sort_order,
-              months: {},
-            });
-          }
-          itemMap.get(r.item_name)!.months[r.month] = {
-            value: r.value != null ? Number(r.value) : null,
-            value_rm: r.value_rm != null ? Number(r.value_rm) : null,
-          };
-        }
-        results[cat] = Array.from(itemMap.values()).sort((a, b) => a.sort_order - b.sort_order);
+        const curData = allResults.find(r => r.cat === cat && r.year === year)?.data || [];
+        const prevData = allResults.find(r => r.cat === cat && r.year !== year)?.data || [];
+        results[cat] = parseMpobRows(curData, prevData);
       }
       setData(results);
     } catch (err) {
@@ -3140,6 +3156,20 @@ const MPOBTab = () => {
     return `${from}-${to} ${aggType === 'average' ? 'Avg' : 'Total'}`;
   };
 
+  const yoyPct = (cur: number | null, prev: number | null) => {
+    if (cur == null || prev == null || prev === 0) return null;
+    return ((cur - prev) / prev) * 100;
+  };
+
+  const YoyBadge = ({ cur, prev }: { cur: number | null; prev: number | null }) => {
+    const pct = yoyPct(cur, prev);
+    if (pct == null) return null;
+    const color = pct > 0 ? 'text-emerald-600' : pct < 0 ? 'text-rose-600' : 'text-slate-400';
+    return <span className={`block text-[9px] ${color} leading-tight`}>{pct > 0 ? '+' : ''}{pct.toFixed(1)}%</span>;
+  };
+
+  const isHighlight = (name: string) => name === 'RBD PALM OIL';
+
   const renderTable = (cat: string, rows: MpobRow[], aggType: 'average' | 'total', showRm: boolean = false) => {
     const isSubtotal = (name: string) =>
       ['PEN. MALAYSIA', 'SABAH/SARAWAK', 'MALAYSIA', 'PALM OIL', 'PALM KERNEL OIL', 'TOTAL'].includes(name);
@@ -3160,20 +3190,25 @@ const MPOBTab = () => {
             <tbody className="divide-y divide-slate-50">
               {rows.map((row) => {
                 const isSub = isSubtotal(row.item_name);
+                const hl = isHighlight(row.item_name);
+                const rowBg = hl ? 'bg-amber-50/60' : isSub ? 'bg-slate-100/60 font-semibold' : '';
+                const stickyBg = hl ? 'bg-amber-50/60' : isSub ? 'bg-slate-100/60 font-semibold' : 'bg-white';
                 return (
                   <React.Fragment key={row.item_name}>
                     {/* Tonnes row */}
-                    <tr className={`hover:bg-slate-50/80 ${isSub ? 'bg-slate-100/60 font-semibold' : ''}`}>
-                      <td className={`px-3 py-2 text-slate-700 sticky left-0 z-10 ${isSub ? 'bg-slate-100/60 font-semibold' : 'bg-white'}`}>
+                    <tr className={`hover:bg-slate-50/80 ${rowBg}`}>
+                      <td className={`px-3 py-2 sticky left-0 z-10 ${stickyBg} ${hl ? 'font-semibold text-amber-800' : 'text-slate-700'}`}>
+                        {hl && <span className="inline-block w-1.5 h-1.5 bg-amber-500 rounded-full mr-1.5 align-middle" />}
                         {row.item_name}
                         {showRm && <span className="ml-1 text-[10px] text-slate-400">(T)</span>}
                       </td>
                       {MPOB_MONTHS.map((_, mi) => {
                         const m = mi + 1;
                         const val = row.months[m]?.value ?? null;
+                        const prevVal = row.prevYear?.[m]?.value ?? null;
                         const isEditing = editCell?.cat === cat && editCell?.item === row.item_name && editCell?.month === m && editCell?.field === 'value';
                         return (
-                          <td key={m} className="px-2 py-2 text-right tabular-nums"
+                          <td key={m} className={`px-2 py-1.5 text-right tabular-nums ${hl ? 'font-medium' : ''}`}
                             onClick={() => !isSub && handleCellClick(cat, row.item_name, m, 'value', val)}
                           >
                             {isEditing ? (
@@ -3183,31 +3218,33 @@ const MPOBTab = () => {
                                 className="w-full px-1 py-0.5 text-right text-xs border border-blue-300 rounded bg-blue-50/50"
                               />
                             ) : val != null ? (
-                              <span className={`${!isSub ? 'cursor-pointer hover:text-blue-600' : ''}`}>
-                                {val.toLocaleString()}
-                              </span>
+                              <div className={`${!isSub ? 'cursor-pointer hover:text-blue-600' : ''}`}>
+                                <span>{val.toLocaleString()}</span>
+                                <YoyBadge cur={val} prev={prevVal} />
+                              </div>
                             ) : !isSub ? (
                               <span className="text-slate-300 cursor-pointer hover:text-blue-400">—</span>
                             ) : <span className="text-slate-300">—</span>}
                           </td>
                         );
                       })}
-                      <td className="px-3 py-2 text-right tabular-nums font-medium text-blue-700 bg-blue-50/30">
+                      <td className={`px-3 py-1.5 text-right tabular-nums font-medium bg-blue-50/30 ${hl ? 'text-amber-700' : 'text-blue-700'}`}>
                         {calcAggregate(row, aggType, 'value')?.toLocaleString() ?? '—'}
                       </td>
                     </tr>
                     {/* RM row (export_product only) */}
                     {showRm && (
-                      <tr className={`hover:bg-slate-50/80 ${isSub ? 'bg-slate-100/60' : ''}`}>
-                        <td className={`px-3 py-2 text-slate-400 text-[10px] sticky left-0 z-10 ${isSub ? 'bg-slate-100/60' : 'bg-white'}`}>
+                      <tr className={`hover:bg-slate-50/80 ${isSub ? 'bg-slate-100/60' : hl ? 'bg-amber-50/40' : ''}`}>
+                        <td className={`px-3 py-1.5 text-slate-400 text-[10px] sticky left-0 z-10 ${isSub ? 'bg-slate-100/60' : hl ? 'bg-amber-50/40' : 'bg-white'}`}>
                           <span className="ml-3">RM Mil</span>
                         </td>
                         {MPOB_MONTHS.map((_, mi) => {
                           const m = mi + 1;
                           const val = row.months[m]?.value_rm ?? null;
+                          const prevVal = row.prevYear?.[m]?.value_rm ?? null;
                           const isEditing = editCell?.cat === cat && editCell?.item === row.item_name && editCell?.month === m && editCell?.field === 'value_rm';
                           return (
-                            <td key={m} className="px-2 py-2 text-right tabular-nums text-slate-500"
+                            <td key={m} className="px-2 py-1.5 text-right tabular-nums text-slate-500"
                               onClick={() => !isSub && handleCellClick(cat, row.item_name, m, 'value_rm', val)}
                             >
                               {isEditing ? (
@@ -3217,16 +3254,17 @@ const MPOBTab = () => {
                                   className="w-full px-1 py-0.5 text-right text-xs border border-blue-300 rounded bg-blue-50/50"
                                 />
                               ) : val != null ? (
-                                <span className={`${!isSub ? 'cursor-pointer hover:text-blue-600' : ''}`}>
-                                  {val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
+                                <div className={`${!isSub ? 'cursor-pointer hover:text-blue-600' : ''}`}>
+                                  <span>{val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  <YoyBadge cur={val} prev={prevVal} />
+                                </div>
                               ) : !isSub ? (
                                 <span className="text-slate-300 cursor-pointer hover:text-blue-400">—</span>
                               ) : <span className="text-slate-300">—</span>}
                             </td>
                           );
                         })}
-                        <td className="px-3 py-2 text-right tabular-nums font-medium text-blue-600 bg-blue-50/30 text-[11px]">
+                        <td className="px-3 py-1.5 text-right tabular-nums font-medium text-blue-600 bg-blue-50/30 text-[11px]">
                           {calcAggregate(row, aggType, 'value_rm')?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '—'}
                         </td>
                       </tr>
