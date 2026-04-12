@@ -1,4 +1,4 @@
-import { dbAll, dbGet, dbRun } from './db';
+import { dbAll, dbGet, dbRun, dbBatchRun } from './db';
 import type { InventoryRow, Alert } from './types';
 
 export async function recalcInventory(product: 'RBD' | 'RSPO', year: number, prevYearEndingStock?: number) {
@@ -17,20 +17,26 @@ export async function recalcInventory(product: 'RBD' | 'RSPO', year: number, pre
     prevYearEndingStock = prev?.ending_stock ?? 0;
   }
 
+  // Calculate all values in memory first
   let prevStock = prevYearEndingStock;
+  const updates: { id: number; endingStock: number; coverageDays: number }[] = [];
 
   for (const row of rows) {
     const usage = row.expected_usage ?? 0;
     const customs = row.customs_volume ?? 0;
     const endingStock = prevStock + customs - usage;
     const coverageDays = usage > 0 ? Math.round((endingStock / usage) * 10) / 10 : 0;
-
-    await dbRun(
-      `UPDATE inventory SET ending_stock = ?, coverage_days = ?, updated_at = NOW() WHERE id = ?`,
-      [endingStock, coverageDays, row.id]
-    );
+    updates.push({ id: row.id!, endingStock, coverageDays });
     prevStock = endingStock;
   }
+
+  // Write all updates in a single batch transaction
+  await dbBatchRun(
+    updates.map(u => ({
+      sql: `UPDATE inventory SET ending_stock = ?, coverage_days = ?, updated_at = NOW() WHERE id = ?`,
+      params: [u.endingStock, u.coverageDays, u.id],
+    }))
+  );
 }
 
 export async function generateAlerts(): Promise<Alert[]> {
@@ -99,18 +105,21 @@ export async function generateAlerts(): Promise<Alert[]> {
     });
   }
 
-  // Save alerts to DB (best-effort, don't fail if writes are blocked)
+  // Save alerts to DB (best-effort)
   try {
-    await dbRun(`UPDATE alerts SET is_active = 0`);
+    const ops: { sql: string; params: any[] }[] = [
+      { sql: `UPDATE alerts SET is_active = 0 WHERE 1=1`, params: [] },
+    ];
     for (const a of alerts) {
-      await dbRun(
-        `INSERT INTO alerts (product, alert_level, depletion_month, required_volume, recommended_shipment, current_price, box_range_zone, message, action_taken, is_active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [a.product, a.alert_level, a.depletion_month, a.required_volume, a.recommended_shipment, a.current_price, a.box_range_zone, a.message, a.action_taken, 1]
-      );
+      ops.push({
+        sql: `INSERT INTO alerts (product, alert_level, depletion_month, required_volume, recommended_shipment, current_price, box_range_zone, message, action_taken, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [a.product, a.alert_level, a.depletion_month, a.required_volume, a.recommended_shipment, a.current_price, a.box_range_zone, a.message, a.action_taken, 1],
+      });
     }
+    await dbBatchRun(ops);
   } catch (e) {
-    console.warn('Alert DB write skipped (read-only mode):', (e as Error).message);
+    console.warn('Alert DB write skipped:', (e as Error).message);
   }
 
   return alerts;

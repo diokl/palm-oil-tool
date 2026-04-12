@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbAll, dbGet, dbRun } from '@/lib/db';
+import { dbAll, dbGet, dbRun, dbBatchRun } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import { recalcInventory } from '@/lib/inventory-calc';
 
@@ -42,21 +42,16 @@ export async function PUT(request: NextRequest) {
     if (!current) return NextResponse.json({ error: 'Record not found' }, { status: 404 });
 
     const oldValue = current[field];
+    const user = edited_by || 'user';
 
-    // Update the field
-    await dbRun(`UPDATE inventory SET ${field} = ?, updated_at = NOW(), updated_by = ? WHERE id = ?`,
-      [value, edited_by || 'user', id]);
+    // Update field + log in one batch
+    await dbBatchRun([
+      { sql: `UPDATE inventory SET ${field} = ?, updated_at = NOW(), updated_by = ? WHERE id = ?`, params: [value, user, id] },
+      { sql: `INSERT INTO edit_log (table_name, record_id, field_name, old_value, new_value, edited_by) VALUES ('inventory', ?, ?, ?, ?, ?)`, params: [id, field, String(oldValue), String(value), user] },
+    ]);
 
-    // Log the edit
-    await dbRun(
-      `INSERT INTO edit_log (table_name, record_id, field_name, old_value, new_value, edited_by)
-       VALUES ('inventory', ?, ?, ?, ?, ?)`,
-      [id, field, String(oldValue), String(value), edited_by || 'user']
-    );
-
-    // Recalculate inventory for this product/year
+    // Recalculate inventory (batch writes inside)
     await recalcInventory(current.product, current.year);
-    // Also recalculate next year if exists
     await recalcInventory(current.product, current.year + 1);
 
     // Return updated data
