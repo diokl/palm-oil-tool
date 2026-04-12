@@ -1327,8 +1327,11 @@ const InventoryTab = () => {
         body: JSON.stringify({ id: rowId, field, value, updated_by: 'user' }),
       });
       if (res.ok) {
-        // Silently refresh data without loading spinner
-        fetchInventory(true);
+        const json = await res.json();
+        // Use the response data directly — no refetch, no loading, no flicker
+        if (json.data) {
+          setInventoryData(json.data);
+        }
       }
     } catch (error) {
       console.error('Failed to update inventory:', error);
