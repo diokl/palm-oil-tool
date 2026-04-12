@@ -4,13 +4,24 @@ import { buildMpobSeedRecords } from '@/lib/mpob-seed';
 
 export async function POST() {
   try {
-    // Check if data already exists
-    const existing = await dbGet(
-      `SELECT COUNT(*) as cnt FROM mpob_data`
-    ) as { cnt: number } | undefined;
+    // Check if data already exists (table may not exist yet — that's fine)
+    let existingCount = 0;
+    try {
+      const existing = await dbGet(
+        `SELECT COUNT(*) as cnt FROM mpob_data`
+      ) as { cnt: number } | undefined;
+      existingCount = existing ? Number(existing.cnt) : 0;
+    } catch {
+      // Table doesn't exist yet — will be created by schema, proceed with seed
+      existingCount = 0;
+    }
 
-    if (existing && Number(existing.cnt) > 0) {
-      return NextResponse.json({ message: 'Seed skipped — data already exists', count: Number(existing.cnt) });
+    if (existingCount > 0) {
+      return NextResponse.json({
+        success: true,
+        message: `이미 데이터가 존재합니다 (${existingCount}건). 강제 재삽입하려면 테이블을 비운 후 다시 시도하세요.`,
+        count: existingCount,
+      });
     }
 
     const records = buildMpobSeedRecords();
@@ -36,7 +47,11 @@ export async function POST() {
       await dbBatchRun(ops.slice(i, i + 100));
     }
 
-    return NextResponse.json({ success: true, count: records.length });
+    return NextResponse.json({
+      success: true,
+      message: `Seed 완료: ${records.length}건 삽입`,
+      count: records.length,
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

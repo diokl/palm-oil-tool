@@ -235,8 +235,10 @@ const Shimmer = ({ className = '' }: { className?: string }) => (
 
 // ============ SHARED COMPONENTS ============
 
-const AlertBanner = ({ alert }: { alert: DashboardAlert }) => {
+const AlertBanner = ({ alert, onAction, onDismiss }: { alert: DashboardAlert; onAction?: () => void; onDismiss?: () => void }) => {
+  const [dismissed, setDismissed] = useState(false);
   const isCritical = alert.alert_level === 'critical';
+  if (dismissed) return null;
   return (
     <div className={`card p-4 flex items-start gap-4 border-l-4 ${isCritical ? 'border-l-rose-500 bg-rose-50/50' : 'border-l-amber-400 bg-amber-50/40'}`}>
       <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isCritical ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
@@ -256,9 +258,17 @@ const AlertBanner = ({ alert }: { alert: DashboardAlert }) => {
           </p>
         )}
       </div>
-      <button className="px-3.5 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-medium hover:bg-slate-700 transition-colors whitespace-nowrap shadow-sm">
-        조치
-      </button>
+      <div className="flex gap-2 flex-shrink-0">
+        {onAction && (
+          <button onClick={onAction} className="px-3.5 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-medium hover:bg-slate-700 transition-colors whitespace-nowrap shadow-sm">
+            조치
+          </button>
+        )}
+        <button onClick={() => { setDismissed(true); onDismiss?.(); }}
+          className="px-2.5 py-1.5 bg-slate-200 text-slate-600 rounded-lg text-xs hover:bg-slate-300 transition-colors" title="닫기">
+          ✕
+        </button>
+      </div>
     </div>
   );
 };
@@ -497,7 +507,7 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
 
 // ============ TAB COMPONENTS ============
 
-const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: boolean }) => {
+const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | null; loading: boolean; onNavigate?: (tab: Tab) => void }) => {
   const [boxDetail, setBoxDetail] = useState<BoxRangeDetail | null>(null);
   const [selectedBoxMonth, setSelectedBoxMonth] = useState<string>(() => {
     if (typeof window !== 'undefined') return localStorage.getItem('dashboard_box_month') || '';
@@ -568,7 +578,9 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
     <div className="space-y-6 animate-fade-in">
       {/* Alerts */}
       {data.alerts?.filter(a => a.alert_level !== 'normal').map((alert, idx) => (
-        <AlertBanner key={idx} alert={alert} />
+        <AlertBanner key={idx} alert={alert}
+          onAction={() => onNavigate?.(alert.product === 'RBD' || alert.product === 'RSPO' ? 'inventory' : 'purchases')}
+        />
       ))}
 
       {/* Metric Cards */}
@@ -1291,8 +1303,8 @@ const InventoryTab = () => {
 
   useEffect(() => { fetchInventory(); }, [subTab]);
 
-  const fetchInventory = async () => {
-    setLoading(true);
+  const fetchInventory = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [product, year] = subTab.includes('rbd')
         ? ['RBD', parseInt(subTab.slice(3))]
@@ -1303,7 +1315,7 @@ const InventoryTab = () => {
     } catch (error) {
       console.error('Failed to fetch inventory:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -1315,8 +1327,8 @@ const InventoryTab = () => {
         body: JSON.stringify({ id: rowId, field, value, updated_by: 'user' }),
       });
       if (res.ok) {
-        // Refresh data to get recalculated values
-        fetchInventory();
+        // Silently refresh data without loading spinner
+        fetchInventory(true);
       }
     } catch (error) {
       console.error('Failed to update inventory:', error);
@@ -3003,11 +3015,15 @@ const MPOBTab = () => {
     try {
       const res = await fetch('/api/mpob/seed', { method: 'POST' });
       const json = await res.json();
-      alert(json.message || `Seed 완료: ${json.count}건`);
-      fetchData();
-      fetchYears();
+      if (json.error) {
+        alert(`Seed 실패: ${json.error}`);
+      } else {
+        alert(json.message || `Seed 완료: ${json.count}건`);
+        fetchData();
+        fetchYears();
+      }
     } catch (err) {
-      alert('Seed 실패');
+      alert('Seed 실패 — 먼저 Supabase에서 mpob_data 테이블을 생성해주세요.');
     } finally {
       setSeeding(false);
     }
@@ -3480,7 +3496,7 @@ export default function Home() {
           </div>
 
           {/* Tab Content */}
-          {activeTab === 'dashboard' && <DashboardTab data={dashboardData} loading={loading} />}
+          {activeTab === 'dashboard' && <DashboardTab data={dashboardData} loading={loading} onNavigate={setActiveTab} />}
           {activeTab === 'fcpo' && <FCPOTab />}
           {activeTab === 'inventory' && <InventoryTab />}
           {activeTab === 'box-range' && <BoxRangeTab />}

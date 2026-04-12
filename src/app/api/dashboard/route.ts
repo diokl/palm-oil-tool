@@ -74,14 +74,19 @@ export async function GET() {
       `SELECT * FROM news ORDER BY date DESC LIMIT 5`
     );
 
-    // MPOB Summary (latest year, key items only)
-    const mpobSummary = await dbAll(
-      `SELECT category, item_name, month, value, value_rm
-       FROM mpob_data
-       WHERE year = 2026
-         AND item_name IN ('RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN', 'PFAD', 'MALAYSIA', 'TOTAL')
-       ORDER BY category, item_name, month`
-    );
+    // MPOB Summary (latest year, key items only) — best-effort, skip if table doesn't exist
+    let mpobSummary: any[] = [];
+    try {
+      mpobSummary = await dbAll(
+        `SELECT category, item_name, month, value, value_rm
+         FROM mpob_data
+         WHERE year = 2026
+           AND item_name IN ('RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN', 'PFAD', 'MALAYSIA', 'TOTAL')
+         ORDER BY category, item_name, month`
+      );
+    } catch (e: any) {
+      console.warn('MPOB summary skipped:', e.message);
+    }
 
     // Latest AI analysis
     const latestAnalysis = await dbGet(
