@@ -67,32 +67,49 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-// 분기 row(Q1~Q3)를 3개월로 펼친다. 예) "2026-07" 1195 → 2026-07, 2026-08, 2026-09
-// Q3 (Jan/Feb/Mar)는 연도가 다음 해로 넘어가므로 contract_month에 이미 반영돼 있어야 한다.
+// 복합월 row(Q1~Q3)를 개별 월로 펼친다.
+// 라벨의 "/" 개수+1로 실제 개월 수를 판단 → "May/Jun"=2개월, "Jul/Aug/Sep"=3개월
+// 단독월(M1~M3)과 contract_month가 겹치면 중복 제거한다.
 function expandQuarterRows(rows: ParsedBMDRow[]): ParsedBMDRow[] {
+  // 1단계: 단독월 contract_month 모아두기 (중복 제거용)
+  const singleMonthKeys = new Set<string>();
+  for (const row of rows) {
+    const isMulti = (row.ric && /-Q[1-3]$/.test(row.ric)) || /\//.test(row.month);
+    if (!isMulti) {
+      singleMonthKeys.add(row.contract_month);
+    }
+  }
+
+  // 2단계: expand
   const expanded: ParsedBMDRow[] = [];
   for (const row of rows) {
-    const isQuarter = (row.ric && /-Q[1-3]$/.test(row.ric)) || /\//.test(row.month);
-    if (!isQuarter) {
+    const isMulti = (row.ric && /-Q[1-3]$/.test(row.ric)) || /\//.test(row.month);
+    if (!isMulti) {
       expanded.push({ month: row.month, contract_month: row.contract_month, ask: row.ask, ric: row.ric });
       continue;
     }
     const m = row.contract_month.match(/^(\d{4})-(\d{2})$/);
     if (!m) {
-      // contract_month 형식이 이상하면 그냥 원본 유지
       expanded.push(row);
       continue;
     }
+    // "/" 개수 + 1 = 실제 개월 수. "May/Jun"→2, "Jul/Aug/Sep"→3, "Jan/Feb/Mar"→3
+    const slashCount = (row.month.match(/\//g) || []).length;
+    const monthCount = slashCount + 1;
+
     let year = parseInt(m[1], 10);
     let month = parseInt(m[2], 10);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < monthCount; i++) {
       const cm = `${year}-${String(month).padStart(2, '0')}`;
-      expanded.push({
-        month: MONTH_NAMES[month - 1],
-        contract_month: cm,
-        ask: row.ask,
-        ric: row.ric,
-      });
+      // 단독월에서 이미 존재하면 스킵 (중복 방지)
+      if (!singleMonthKeys.has(cm)) {
+        expanded.push({
+          month: MONTH_NAMES[month - 1],
+          contract_month: cm,
+          ask: row.ask,
+          ric: row.ric,
+        });
+      }
       month += 1;
       if (month > 12) { month = 1; year += 1; }
     }
