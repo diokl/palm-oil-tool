@@ -44,11 +44,20 @@ export async function GET() {
        ORDER BY product`
     );
 
-    // Box range for active months
+    // Box range for all contract months with sufficient data (>=10 price points)
+    const activeMonths = await dbAll(
+      `SELECT contract_month, COUNT(*) as cnt
+       FROM fcpo_settlement
+       WHERE settlement_usd IS NOT NULL
+       GROUP BY contract_month
+       HAVING cnt >= 10
+       ORDER BY contract_month`
+    ) as { contract_month: string; cnt: number }[];
+
     const boxRanges: any[] = [];
-    for (const month of ['2026-04', '2026-05', '2026-06']) {
-      const br = await calculateBoxRange(month);
-      if (br) boxRanges.push({ contract_month: month, zone: br.current_zone, current_price: br.current_price });
+    for (const { contract_month } of activeMonths) {
+      const br = await calculateBoxRange(contract_month);
+      if (br) boxRanges.push({ contract_month, zone: br.current_zone, current_price: br.current_price });
     }
 
     // Recent purchases

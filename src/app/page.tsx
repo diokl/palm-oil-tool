@@ -563,21 +563,17 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
           <div className="flex items-center justify-between mb-1">
             <p className="text-xs text-slate-500">박스권 위치</p>
             {data.box_ranges && data.box_ranges.length > 1 && (
-              <div className="flex gap-1">
+              <select
+                value={selectedBoxMonth}
+                onChange={(e) => setSelectedBoxMonth(e.target.value)}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium border border-slate-200 bg-white text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              >
                 {data.box_ranges.map((br: any) => (
-                  <button
-                    key={br.contract_month}
-                    onClick={() => setSelectedBoxMonth(br.contract_month)}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-all ${
-                      selectedBoxMonth === br.contract_month
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                    }`}
-                  >
-                    {br.contract_month.slice(5)}월
-                  </button>
+                  <option key={br.contract_month} value={br.contract_month}>
+                    {br.contract_month}
+                  </option>
                 ))}
-              </div>
+              </select>
             )}
           </div>
           <p className={`text-xl font-bold mt-1 ${
