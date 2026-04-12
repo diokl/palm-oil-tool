@@ -54,11 +54,15 @@ export async function GET() {
        ORDER BY contract_month`
     ) as { contract_month: string; cnt: number }[];
 
-    const boxRanges: any[] = [];
-    for (const { contract_month } of activeMonths) {
-      const br = await calculateBoxRange(contract_month);
-      if (br) boxRanges.push({ contract_month, zone: br.current_zone, current_price: br.current_price });
-    }
+    const boxRangeResults = await Promise.all(
+      activeMonths.map(({ contract_month }) => calculateBoxRange(contract_month).catch(() => null))
+    );
+    const boxRanges = activeMonths
+      .map(({ contract_month }, i) => {
+        const br = boxRangeResults[i];
+        return br ? { contract_month, zone: br.current_zone, current_price: br.current_price } : null;
+      })
+      .filter(Boolean);
 
     // Recent purchases
     const recentPurchases = await dbAll(
