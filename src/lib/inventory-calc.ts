@@ -1,13 +1,19 @@
 import { dbAll, dbGet, dbRun, dbBatchRun } from './db';
 import type { InventoryRow, Alert } from './types';
 
-export async function recalcInventory(product: 'RBD' | 'RSPO', year: number, prevYearEndingStock?: number) {
-  const rows = await dbAll(
+export async function recalcInventory(
+  product: 'RBD' | 'RSPO',
+  year: number,
+  prevYearEndingStock?: number,
+  /** If rows are already fetched, pass them to skip a SELECT round trip */
+  prefetchedRows?: InventoryRow[],
+): Promise<InventoryRow[]> {
+  const rows = prefetchedRows ?? await dbAll(
     `SELECT * FROM inventory WHERE product = ? AND year = ? ORDER BY month ASC`,
     [product, year]
   ) as InventoryRow[];
 
-  if (rows.length === 0) return;
+  if (rows.length === 0) return rows;
 
   if (prevYearEndingStock === undefined) {
     const prev = await dbGet(
@@ -37,6 +43,13 @@ export async function recalcInventory(product: 'RBD' | 'RSPO', year: number, pre
       params: [u.endingStock, u.coverageDays, u.id],
     }))
   );
+
+  // Return updated rows (apply calculated values in memory — skip extra SELECT)
+  return rows.map((row, i) => ({
+    ...row,
+    ending_stock: updates[i].endingStock,
+    coverage_days: updates[i].coverageDays,
+  }));
 }
 
 export async function generateAlerts(): Promise<Alert[]> {

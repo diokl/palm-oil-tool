@@ -44,23 +44,24 @@ export async function PUT(request: NextRequest) {
     const oldValue = current[field];
     const user = edited_by || 'user';
 
-    // Update field + log in one batch
+    // Update field + log in one batch (1 round trip)
     await dbBatchRun([
       { sql: `UPDATE inventory SET ${field} = ?, updated_at = NOW(), updated_by = ? WHERE id = ?`, params: [value, user, id] },
       { sql: `INSERT INTO edit_log (table_name, record_id, field_name, old_value, new_value, edited_by) VALUES ('inventory', ?, ?, ?, ?, ?)`, params: [id, field, String(oldValue), String(value), user] },
     ]);
 
-    // Recalculate inventory (batch writes inside)
-    await recalcInventory(current.product, current.year);
-    await recalcInventory(current.product, current.year + 1);
+    // Recalculate inventory — returns updated rows directly (no extra SELECT needed)
+    const updatedRows = await recalcInventory(current.product, current.year);
 
-    // Return updated data
-    const updated = await dbAll(
-      `SELECT * FROM inventory WHERE product = ? AND year = ? ORDER BY month`,
-      [current.product, current.year]
-    );
+    // Only recalc next year if editing December (month 12) — saves ~3 round trips
+    if (current.month === 12) {
+      const dec = updatedRows.find((r: any) => r.month === 12);
+      const decEndingStock = dec?.ending_stock ?? 0;
+      // Fire-and-forget: next year recalc doesn't affect current year response
+      recalcInventory(current.product, current.year + 1, decEndingStock).catch(() => {});
+    }
 
-    return NextResponse.json({ data: updated });
+    return NextResponse.json({ data: updatedRows });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

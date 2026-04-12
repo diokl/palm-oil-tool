@@ -1320,6 +1320,30 @@ const InventoryTab = () => {
   };
 
   const handleCellSave = async (rowId: number, field: string, value: number) => {
+    // 1) Optimistic update: recalculate locally for instant UI feedback
+    setInventoryData(prev => {
+      const rows = prev.map(r => ({ ...r }));
+      const idx = rows.findIndex(r => r.id === rowId);
+      if (idx === -1) return prev;
+      (rows[idx] as any)[field] = value;
+
+      // Derive prev-year ending stock from the first row's current values
+      const first = prev[0];
+      const prevYearEnd = first.ending_stock + first.expected_usage - first.customs_volume;
+
+      // Recalculate ending_stock & coverage_days for all rows sequentially
+      let prevStock = prevYearEnd;
+      for (let i = 0; i < rows.length; i++) {
+        const usage = rows[i].expected_usage ?? 0;
+        const customs = rows[i].customs_volume ?? 0;
+        rows[i].ending_stock = prevStock + customs - usage;
+        rows[i].coverage_days = usage > 0 ? Math.round((rows[i].ending_stock / usage) * 10) / 10 : 0;
+        prevStock = rows[i].ending_stock;
+      }
+      return rows;
+    });
+
+    // 2) Background server sync — user doesn't wait for this
     try {
       const res = await fetch('/api/inventory', {
         method: 'PUT',
@@ -1328,13 +1352,12 @@ const InventoryTab = () => {
       });
       if (res.ok) {
         const json = await res.json();
-        // Use the response data directly — no refetch, no loading, no flicker
-        if (json.data) {
-          setInventoryData(json.data);
-        }
+        // Apply server truth (corrects any rounding differences)
+        if (json.data) setInventoryData(json.data);
       }
     } catch (error) {
       console.error('Failed to update inventory:', error);
+      fetchInventory(true); // Rollback to server state on error
     }
   };
 
