@@ -293,7 +293,10 @@ const BoxRangeGauge = ({ data }: { data: BoxRangeDetail }) => {
     <div className="card p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-slate-700">{data.contract_month} 박스권 분석</h3>
+          <h3 className="text-sm font-semibold text-slate-700">
+            {data.contract_month} 박스권 분석
+            {(data as any).as_of_date && <span className="ml-2 text-xs font-normal text-slate-400">({(data as any).as_of_date} 기준)</span>}
+          </h3>
           <span className={`inline-block mt-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${zoneStyle}`}>
             {data.current_zone}
           </span>
@@ -487,6 +490,7 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
 
 const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: boolean }) => {
   const [boxDetail, setBoxDetail] = useState<BoxRangeDetail | null>(null);
+  const [selectedBoxMonth, setSelectedBoxMonth] = useState<string>('');
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
@@ -510,14 +514,24 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
     }
   };
 
+  // Set initial selected month from box_ranges
   useEffect(() => {
-    if (data?.box_ranges?.[0]?.contract_month) {
-      fetch(`/api/box-range?contract_month=${data.box_ranges[0].contract_month}`)
-        .then(r => r.json())
-        .then(d => { if (d && !d.error) setBoxDetail(d); })
-        .catch(() => {});
+    if (data?.box_ranges?.length && !selectedBoxMonth) {
+      setSelectedBoxMonth(data.box_ranges[0].contract_month);
     }
   }, [data?.box_ranges]);
+
+  // Fetch box detail when selected month changes
+  useEffect(() => {
+    if (!selectedBoxMonth) return;
+    setBoxDetail(null);
+    fetch(`/api/box-range?contract_month=${selectedBoxMonth}`)
+      .then(r => r.json())
+      .then(d => { if (d && !d.error) setBoxDetail(d); })
+      .catch(() => {});
+  }, [selectedBoxMonth]);
+
+  const selectedBoxRange = data?.box_ranges?.find(b => b.contract_month === selectedBoxMonth) || data?.box_ranges?.[0];
 
   if (loading) {
     return (
@@ -545,16 +559,34 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         <MetricCard label="FCPO 근월물 (USD)" value={formatPrice(latestFCPO?.settlement_usd)} unit={`기준일: ${data.fcpo_latest_date || '-'}`} />
-        <MetricCard
-          label="박스권 위치"
-          value={data.box_ranges?.[0]?.zone || '-'}
-          unit={`${data.box_ranges?.[0]?.contract_month || ''} 기준`}
-          accent={
-            data.box_ranges?.[0]?.zone === '전량구매' ? 'text-emerald-600' :
-            data.box_ranges?.[0]?.zone === '적극매수' ? 'text-blue-600' :
-            data.box_ranges?.[0]?.zone === '구매대기' ? 'text-rose-600' : 'text-slate-900'
-          }
-        />
+        <div className="card p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-slate-500">박스권 위치</p>
+            {data.box_ranges && data.box_ranges.length > 1 && (
+              <div className="flex gap-1">
+                {data.box_ranges.map((br: any) => (
+                  <button
+                    key={br.contract_month}
+                    onClick={() => setSelectedBoxMonth(br.contract_month)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-all ${
+                      selectedBoxMonth === br.contract_month
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >
+                    {br.contract_month.slice(5)}월
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <p className={`text-xl font-bold mt-1 ${
+            selectedBoxRange?.zone === '전량구매' ? 'text-emerald-600' :
+            selectedBoxRange?.zone === '적극구매' || selectedBoxRange?.zone === '적극매수' ? 'text-blue-600' :
+            selectedBoxRange?.zone === '구매대기' ? 'text-rose-600' : 'text-slate-900'
+          }`}>{selectedBoxRange?.zone || '-'}</p>
+          <p className="text-[11px] text-slate-400 mt-1">{selectedBoxRange?.contract_month || ''} 기준</p>
+        </div>
         <MetricCard label="RBD 재고" value={rbd ? `${(rbd.ending_stock / 1000).toFixed(0)}K` : '-'} unit={rbd ? `회전일 ${rbd.coverage_days}일` : ''} />
         <MetricCard label="RSPO 재고" value={rspo ? `${(rspo.ending_stock / 1000).toFixed(0)}K` : '-'} unit={rspo ? `회전일 ${rspo.coverage_days}일` : ''} />
       </div>
@@ -1319,20 +1351,32 @@ const InventoryTab = () => {
 
 const BoxRangeTab = () => {
   const [contractMonth, setContractMonth] = useState('2026-04');
+  const [asOfDate, setAsOfDate] = useState<string>('');
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [boxRangeData, setBoxRangeData] = useState<BoxRangeDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [months, setMonths] = useState<string[]>([]);
 
   useEffect(() => {
-    fetchBoxRange();
     fetchAvailableMonths();
+  }, []);
+
+  useEffect(() => {
+    fetchAvailableDates();
+    setAsOfDate(''); // reset date when month changes
   }, [contractMonth]);
+
+  useEffect(() => {
+    fetchBoxRange();
+  }, [contractMonth, asOfDate]);
 
   const fetchBoxRange = async () => {
     setLoading(true);
     setBoxRangeData(null);
     try {
-      const res = await fetch(`/api/box-range?contract_month=${contractMonth}`);
+      let url = `/api/box-range?contract_month=${contractMonth}`;
+      if (asOfDate) url += `&as_of_date=${asOfDate}`;
+      const res = await fetch(url);
       const json = await res.json();
       if (json && json.zones && !json.error) {
         setBoxRangeData(json as BoxRangeDetail);
@@ -1358,9 +1402,21 @@ const BoxRangeTab = () => {
     }
   };
 
+  const fetchAvailableDates = async () => {
+    try {
+      const res = await fetch(`/api/fcpo?contract_month=${contractMonth}`);
+      const json = await res.json();
+      const dates = (json.data || []).map((r: any) => r.date).filter(Boolean).sort();
+      setAvailableDates(dates);
+    } catch (error) {
+      console.error('Failed to fetch dates:', error);
+      setAvailableDates([]);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Month Selector */}
+      {/* Month & Date Selector */}
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-slate-700">계약월 선택</h3>
@@ -1379,6 +1435,35 @@ const BoxRangeTab = () => {
             </button>
           ))}
         </div>
+        {/* Date selector */}
+        {availableDates.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-slate-100">
+            <div className="flex items-center gap-3">
+              <label className="text-xs font-medium text-slate-500 whitespace-nowrap">기준일자</label>
+              <select
+                value={asOfDate}
+                onChange={(e) => setAsOfDate(e.target.value)}
+                className="flex-1 max-w-[200px] px-3 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
+              >
+                <option value="">최신 (전체 데이터)</option>
+                {[...availableDates].reverse().map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+              {asOfDate && (
+                <button
+                  onClick={() => setAsOfDate('')}
+                  className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                >
+                  초기화
+                </button>
+              )}
+              <p className="text-[11px] text-slate-400 ml-auto">
+                {asOfDate ? `${asOfDate} 기준 10/20/60일 이평` : '최신 데이터 기준'}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Box Range */}

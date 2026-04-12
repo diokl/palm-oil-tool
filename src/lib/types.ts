@@ -35,6 +35,7 @@ export interface InventoryTable {
 export interface BoxRangeResult {
   contract_month: string;
   current_price: number;
+  as_of_date?: string;
   // Basic data (10/20/60 day)
   periods: {
     days: number;

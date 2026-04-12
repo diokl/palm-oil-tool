@@ -1,19 +1,23 @@
 import { dbAll } from './db';
 import type { BoxRangeResult } from './types';
 
-export async function calculateBoxRange(contractMonth: string, currentPrice?: number): Promise<BoxRangeResult | null> {
+export async function calculateBoxRange(contractMonth: string, currentPrice?: number, asOfDate?: string): Promise<BoxRangeResult | null> {
   // Get all prices for this contract month, ordered by date
-  const prices = await dbAll(
-    `SELECT date, settlement_usd FROM fcpo_settlement
-     WHERE contract_month = ? AND settlement_usd IS NOT NULL
-     ORDER BY date ASC`,
-    [contractMonth]
-  ) as { date: string; settlement_usd: number }[];
+  const query = asOfDate
+    ? `SELECT date, settlement_usd FROM fcpo_settlement
+       WHERE contract_month = ? AND settlement_usd IS NOT NULL AND date <= ?
+       ORDER BY date ASC`
+    : `SELECT date, settlement_usd FROM fcpo_settlement
+       WHERE contract_month = ? AND settlement_usd IS NOT NULL
+       ORDER BY date ASC`;
+  const params = asOfDate ? [contractMonth, asOfDate] : [contractMonth];
+  const prices = await dbAll(query, params) as { date: string; settlement_usd: number }[];
 
   if (prices.length < 10) return null;
 
   const allValues = prices.map(p => p.settlement_usd);
   const latest = currentPrice ?? allValues[allValues.length - 1];
+  const latestDate = prices[prices.length - 1].date;
 
   // Calculate for 10, 20, 60 day periods
   const periods = [10, 20, 60].map(days => {
@@ -106,6 +110,7 @@ export async function calculateBoxRange(contractMonth: string, currentPrice?: nu
   return {
     contract_month: contractMonth,
     current_price: latest,
+    as_of_date: latestDate,
     periods,
     zones: { full_buy_upper, active_buy_upper, monitoring_upper, min_buy_upper },
     current_zone,
