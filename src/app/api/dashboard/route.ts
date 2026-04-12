@@ -50,7 +50,7 @@ export async function GET() {
        FROM fcpo_settlement
        WHERE settlement_usd IS NOT NULL
        GROUP BY contract_month
-       HAVING cnt >= 10
+       HAVING COUNT(*) >= 10
        ORDER BY contract_month`
     ) as { contract_month: string; cnt: number }[];
 
