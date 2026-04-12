@@ -490,7 +490,10 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
 
 const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: boolean }) => {
   const [boxDetail, setBoxDetail] = useState<BoxRangeDetail | null>(null);
-  const [selectedBoxMonth, setSelectedBoxMonth] = useState<string>('');
+  const [selectedBoxMonth, setSelectedBoxMonth] = useState<string>(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('dashboard_box_month') || '';
+    return '';
+  });
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
@@ -514,16 +517,19 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
     }
   };
 
-  // Set initial selected month from box_ranges
+  // Set initial selected month from box_ranges (only if no saved preference)
   useEffect(() => {
     if (data?.box_ranges?.length && !selectedBoxMonth) {
-      setSelectedBoxMonth(data.box_ranges[0].contract_month);
+      const saved = localStorage.getItem('dashboard_box_month');
+      const validSaved = saved && data.box_ranges.some(b => b.contract_month === saved);
+      setSelectedBoxMonth(validSaved ? saved : data.box_ranges[0].contract_month);
     }
   }, [data?.box_ranges]);
 
-  // Fetch box detail when selected month changes
+  // Save selection & fetch box detail when selected month changes
   useEffect(() => {
     if (!selectedBoxMonth) return;
+    localStorage.setItem('dashboard_box_month', selectedBoxMonth);
     setBoxDetail(null);
     fetch(`/api/box-range?contract_month=${selectedBoxMonth}`)
       .then(r => r.json())
@@ -1346,7 +1352,10 @@ const InventoryTab = () => {
 };
 
 const BoxRangeTab = () => {
-  const [contractMonth, setContractMonth] = useState('2026-04');
+  const [contractMonth, setContractMonth] = useState<string>(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('boxrange_contract_month') || '2026-04';
+    return '2026-04';
+  });
   const [asOfDate, setAsOfDate] = useState<string>('');
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [boxRangeData, setBoxRangeData] = useState<BoxRangeDetail | null>(null);
@@ -1358,6 +1367,7 @@ const BoxRangeTab = () => {
   }, []);
 
   useEffect(() => {
+    localStorage.setItem('boxrange_contract_month', contractMonth);
     fetchAvailableDates();
     setAsOfDate(''); // reset date when month changes
   }, [contractMonth]);
