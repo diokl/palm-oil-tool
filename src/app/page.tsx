@@ -6,7 +6,7 @@ import {
   ComposedChart, Bar
 } from 'recharts';
 
-type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify';
+type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob';
 type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026';
 
 // ============ TYPES ============
@@ -60,12 +60,21 @@ interface RecentPurchaseItem {
   notes: string;
 }
 
+interface MpobSummaryRow {
+  category: string;
+  item_name: string;
+  month: number;
+  value: number | null;
+  value_rm: number | null;
+}
+
 interface DashboardData {
   alerts: DashboardAlert[];
   fcpo_latest: FCPOLatest[];
   fcpo_latest_date: string;
   inventory_summary: InventorySummaryItem[];
   box_ranges: BoxRangeItem[];
+  mpob_summary: MpobSummaryRow[];
   recent_purchases: RecentPurchaseItem[];
   recent_news: NewsItem[];
   ai_analysis: string | null;
@@ -728,6 +737,65 @@ const DashboardTab = ({ data, loading }: { data: DashboardData | null; loading: 
         <h3 className="text-sm font-semibold text-slate-700 mb-3">최근 구매 이력</h3>
         <RecentPurchasesTable data={data.recent_purchases || []} loading={false} />
       </div>
+
+      {/* MPOB Summary */}
+      {data.mpob_summary && data.mpob_summary.length > 0 && (() => {
+        // Group by category+item, show latest month values
+        const grouped = new Map<string, { category: string; item_name: string; latestMonth: number; latestValue: number | null; avg: number | null; count: number; sum: number }>();
+        for (const r of data.mpob_summary) {
+          const key = `${r.category}:${r.item_name}`;
+          const cur = grouped.get(key);
+          const val = r.value != null ? Number(r.value) : null;
+          if (!cur) {
+            grouped.set(key, { category: r.category, item_name: r.item_name, latestMonth: r.month, latestValue: val, avg: null, count: val != null ? 1 : 0, sum: val ?? 0 });
+          } else {
+            if (val != null) { cur.count++; cur.sum += val; }
+            if (r.month > cur.latestMonth && val != null) { cur.latestMonth = r.month; cur.latestValue = val; }
+          }
+        }
+        // Calc avg
+        for (const v of grouped.values()) {
+          if (v.count > 0) v.avg = Math.round(v.sum / v.count);
+        }
+        const catLabels: Record<string, string> = { stock: '재고', production: '생산', export_port: '수출(항구)', export_product: '수출(제품)' };
+        const monthNames = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const items = Array.from(grouped.values());
+
+        return (
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full" />
+              MPOB 요약 (2026)
+            </h3>
+            <div className="card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-3 py-2 text-left text-slate-500">구분</th>
+                      <th className="px-3 py-2 text-left text-slate-500">항목</th>
+                      <th className="px-3 py-2 text-right text-slate-500">최신월</th>
+                      <th className="px-3 py-2 text-right text-slate-500">최신값 (T)</th>
+                      <th className="px-3 py-2 text-right text-slate-500">평균/합계</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {items.map((item, i) => (
+                      <tr key={i} className="hover:bg-slate-50/80">
+                        <td className="px-3 py-2 text-slate-500">{catLabels[item.category] || item.category}</td>
+                        <td className="px-3 py-2 font-medium text-slate-700">{item.item_name}</td>
+                        <td className="px-3 py-2 text-right text-slate-500">{monthNames[item.latestMonth]}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-slate-800 font-medium">{item.latestValue?.toLocaleString() ?? '—'}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-blue-600">{item.avg?.toLocaleString() ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
@@ -2844,6 +2912,423 @@ const DocVerifyTab = () => {
   );
 };
 
+// ============ MPOB TAB ============
+
+type MpobSubTab = 'stock' | 'production' | 'export_port' | 'export_product' | 'all';
+
+const MPOB_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const MPOB_CATEGORIES: { id: MpobSubTab; label: string; aggType: 'average' | 'total' }[] = [
+  { id: 'stock', label: 'Stock (재고)', aggType: 'average' },
+  { id: 'production', label: 'Production (생산)', aggType: 'total' },
+  { id: 'export_port', label: 'Export by Port', aggType: 'total' },
+  { id: 'export_product', label: 'Export by Product', aggType: 'total' },
+  { id: 'all', label: '전체 보기', aggType: 'total' },
+];
+
+interface MpobRow {
+  item_name: string;
+  parent_group: string | null;
+  sort_order: number;
+  months: { [month: number]: { value: number | null; value_rm: number | null } };
+}
+
+const MPOBTab = () => {
+  const [subTab, setSubTab] = useState<MpobSubTab>('stock');
+  const [year, setYear] = useState(2026);
+  const [availableYears, setAvailableYears] = useState<number[]>([2025, 2026]);
+  const [data, setData] = useState<Record<string, MpobRow[]>>({});
+  const [loading, setLoading] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [editCell, setEditCell] = useState<{ cat: string; item: string; month: number; field: 'value' | 'value_rm' } | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const editRef = useRef<HTMLInputElement>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkCategory, setBulkCategory] = useState<string>('stock');
+
+  const categoriesToFetch = subTab === 'all'
+    ? ['stock', 'production', 'export_port', 'export_product']
+    : [subTab];
+
+  useEffect(() => {
+    fetchData();
+    fetchYears();
+  }, [year, subTab]);
+
+  const fetchYears = async () => {
+    try {
+      const res = await fetch('/api/mpob');
+      const json = await res.json();
+      if (json.years?.length) setAvailableYears(json.years);
+    } catch {}
+  };
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const results: Record<string, MpobRow[]> = {};
+      for (const cat of categoriesToFetch) {
+        const res = await fetch(`/api/mpob?category=${cat}&year=${year}`);
+        const json = await res.json();
+        const rows: any[] = json.data || [];
+        // Group by item
+        const itemMap = new Map<string, MpobRow>();
+        for (const r of rows) {
+          if (!itemMap.has(r.item_name)) {
+            itemMap.set(r.item_name, {
+              item_name: r.item_name,
+              parent_group: r.parent_group,
+              sort_order: r.sort_order,
+              months: {},
+            });
+          }
+          itemMap.get(r.item_name)!.months[r.month] = {
+            value: r.value != null ? Number(r.value) : null,
+            value_rm: r.value_rm != null ? Number(r.value_rm) : null,
+          };
+        }
+        results[cat] = Array.from(itemMap.values()).sort((a, b) => a.sort_order - b.sort_order);
+      }
+      setData(results);
+    } catch (err) {
+      console.error('MPOB fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSeed = async () => {
+    setSeeding(true);
+    try {
+      const res = await fetch('/api/mpob/seed', { method: 'POST' });
+      const json = await res.json();
+      alert(json.message || `Seed 완료: ${json.count}건`);
+      fetchData();
+      fetchYears();
+    } catch (err) {
+      alert('Seed 실패');
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const handleCellClick = (cat: string, item: string, month: number, field: 'value' | 'value_rm', currentVal: number | null) => {
+    setEditCell({ cat, item, month, field });
+    setEditValue(currentVal != null ? String(currentVal) : '');
+    setTimeout(() => editRef.current?.select(), 50);
+  };
+
+  const handleCellSave = async () => {
+    if (!editCell) return;
+    const parsed = editValue.trim() === '' ? null : parseFloat(editValue.replace(/,/g, ''));
+    const { cat, item, month, field } = editCell;
+
+    // Find current values
+    const row = data[cat]?.find(r => r.item_name === item);
+    const cur = row?.months[month] || { value: null, value_rm: null };
+
+    try {
+      await fetch('/api/mpob', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: cat,
+          item_name: item,
+          year,
+          month,
+          value: field === 'value' ? parsed : cur.value,
+          value_rm: field === 'value_rm' ? parsed : cur.value_rm,
+        }),
+      });
+      fetchData();
+    } catch {}
+    setEditCell(null);
+  };
+
+  const handleCellKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleCellSave();
+    if (e.key === 'Escape') setEditCell(null);
+  };
+
+  const handleBulkPaste = async () => {
+    if (!bulkText.trim()) return;
+    // Parse tab/space separated data: item_name, jan, feb, mar, ..., dec
+    const lines = bulkText.trim().split('\n');
+    const records: any[] = [];
+    for (const line of lines) {
+      const parts = line.split(/\t/).map(s => s.trim());
+      if (parts.length < 2) continue;
+      const itemName = parts[0];
+      for (let m = 1; m < parts.length && m <= 12; m++) {
+        const raw = parts[m].replace(/,/g, '');
+        const val = raw === '' || raw === '-' ? null : parseFloat(raw);
+        if (val == null && raw !== '' && raw !== '-') continue;
+        records.push({
+          category: bulkCategory,
+          item_name: itemName,
+          year,
+          month: m,
+          value: val,
+          value_rm: null,
+          sort_order: 0,
+        });
+      }
+    }
+    if (records.length === 0) { alert('파싱할 데이터가 없습니다.'); return; }
+    try {
+      const res = await fetch('/api/mpob', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records }),
+      });
+      const json = await res.json();
+      alert(`${json.count || records.length}건 업데이트 완료`);
+      setBulkOpen(false);
+      setBulkText('');
+      fetchData();
+    } catch (err) {
+      alert('Bulk 업데이트 실패');
+    }
+  };
+
+  const addYear = () => {
+    const maxYear = Math.max(...availableYears, year);
+    const newYear = maxYear + 1;
+    setAvailableYears(prev => [...prev, newYear]);
+    setYear(newYear);
+  };
+
+  // Calculate aggregate (average or total) for filled months
+  const calcAggregate = (row: MpobRow, aggType: 'average' | 'total', field: 'value' | 'value_rm' = 'value') => {
+    const filled = Object.entries(row.months)
+      .filter(([_, v]) => v[field] != null)
+      .map(([_, v]) => v[field] as number);
+    if (filled.length === 0) return null;
+    const sum = filled.reduce((a, b) => a + b, 0);
+    return aggType === 'average' ? Math.round(sum / filled.length) : sum;
+  };
+
+  const getAggLabel = (rows: MpobRow[], aggType: 'average' | 'total') => {
+    // Find max filled month across all rows
+    let maxMonth = 0;
+    for (const row of rows) {
+      for (const m of Object.keys(row.months)) {
+        const mi = parseInt(m);
+        if (row.months[mi]?.value != null && mi > maxMonth) maxMonth = mi;
+      }
+    }
+    if (maxMonth === 0) return aggType === 'average' ? 'Average' : 'Total';
+    const from = MPOB_MONTHS[0];
+    const to = MPOB_MONTHS[maxMonth - 1];
+    return `${from}-${to} ${aggType === 'average' ? 'Avg' : 'Total'}`;
+  };
+
+  const renderTable = (cat: string, rows: MpobRow[], aggType: 'average' | 'total', showRm: boolean = false) => {
+    const isSubtotal = (name: string) =>
+      ['PEN. MALAYSIA', 'SABAH/SARAWAK', 'MALAYSIA', 'PALM OIL', 'PALM KERNEL OIL', 'TOTAL'].includes(name);
+
+    return (
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200">
+                <th className="px-3 py-2.5 text-left font-semibold text-slate-600 sticky left-0 bg-slate-50 min-w-[160px] z-10">Products</th>
+                {MPOB_MONTHS.map(m => (
+                  <th key={m} className="px-2 py-2.5 text-right font-semibold text-slate-600 min-w-[80px]">{m}</th>
+                ))}
+                <th className="px-3 py-2.5 text-right font-semibold text-blue-700 min-w-[100px] bg-blue-50/50">{getAggLabel(rows, aggType)}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {rows.map((row) => {
+                const isSub = isSubtotal(row.item_name);
+                return (
+                  <React.Fragment key={row.item_name}>
+                    {/* Tonnes row */}
+                    <tr className={`hover:bg-slate-50/80 ${isSub ? 'bg-slate-100/60 font-semibold' : ''}`}>
+                      <td className={`px-3 py-2 text-slate-700 sticky left-0 z-10 ${isSub ? 'bg-slate-100/60 font-semibold' : 'bg-white'}`}>
+                        {row.item_name}
+                        {showRm && <span className="ml-1 text-[10px] text-slate-400">(T)</span>}
+                      </td>
+                      {MPOB_MONTHS.map((_, mi) => {
+                        const m = mi + 1;
+                        const val = row.months[m]?.value ?? null;
+                        const isEditing = editCell?.cat === cat && editCell?.item === row.item_name && editCell?.month === m && editCell?.field === 'value';
+                        return (
+                          <td key={m} className="px-2 py-2 text-right tabular-nums"
+                            onClick={() => !isSub && handleCellClick(cat, row.item_name, m, 'value', val)}
+                          >
+                            {isEditing ? (
+                              <input ref={editRef} type="text" value={editValue}
+                                onChange={e => setEditValue(e.target.value)}
+                                onBlur={handleCellSave} onKeyDown={handleCellKeyDown}
+                                className="w-full px-1 py-0.5 text-right text-xs border border-blue-300 rounded bg-blue-50/50"
+                              />
+                            ) : val != null ? (
+                              <span className={`${!isSub ? 'cursor-pointer hover:text-blue-600' : ''}`}>
+                                {val.toLocaleString()}
+                              </span>
+                            ) : !isSub ? (
+                              <span className="text-slate-300 cursor-pointer hover:text-blue-400">—</span>
+                            ) : <span className="text-slate-300">—</span>}
+                          </td>
+                        );
+                      })}
+                      <td className="px-3 py-2 text-right tabular-nums font-medium text-blue-700 bg-blue-50/30">
+                        {calcAggregate(row, aggType, 'value')?.toLocaleString() ?? '—'}
+                      </td>
+                    </tr>
+                    {/* RM row (export_product only) */}
+                    {showRm && (
+                      <tr className={`hover:bg-slate-50/80 ${isSub ? 'bg-slate-100/60' : ''}`}>
+                        <td className={`px-3 py-2 text-slate-400 text-[10px] sticky left-0 z-10 ${isSub ? 'bg-slate-100/60' : 'bg-white'}`}>
+                          <span className="ml-3">RM Mil</span>
+                        </td>
+                        {MPOB_MONTHS.map((_, mi) => {
+                          const m = mi + 1;
+                          const val = row.months[m]?.value_rm ?? null;
+                          const isEditing = editCell?.cat === cat && editCell?.item === row.item_name && editCell?.month === m && editCell?.field === 'value_rm';
+                          return (
+                            <td key={m} className="px-2 py-2 text-right tabular-nums text-slate-500"
+                              onClick={() => !isSub && handleCellClick(cat, row.item_name, m, 'value_rm', val)}
+                            >
+                              {isEditing ? (
+                                <input ref={editRef} type="text" value={editValue}
+                                  onChange={e => setEditValue(e.target.value)}
+                                  onBlur={handleCellSave} onKeyDown={handleCellKeyDown}
+                                  className="w-full px-1 py-0.5 text-right text-xs border border-blue-300 rounded bg-blue-50/50"
+                                />
+                              ) : val != null ? (
+                                <span className={`${!isSub ? 'cursor-pointer hover:text-blue-600' : ''}`}>
+                                  {val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              ) : !isSub ? (
+                                <span className="text-slate-300 cursor-pointer hover:text-blue-400">—</span>
+                              ) : <span className="text-slate-300">—</span>}
+                            </td>
+                          );
+                        })}
+                        <td className="px-3 py-2 text-right tabular-nums font-medium text-blue-600 bg-blue-50/30 text-[11px]">
+                          {calcAggregate(row, aggType, 'value_rm')?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '—'}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-slate-800">MPOB 데이터</h2>
+          <div className="flex items-center gap-1.5">
+            <select value={year} onChange={e => setYear(Number(e.target.value))}
+              className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+              {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <button onClick={addYear} className="px-2 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200" title="새 연도 추가">+</button>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => setBulkOpen(true)} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">
+            Bulk 붙여넣기
+          </button>
+          <button onClick={handleSeed} disabled={seeding} className="px-3 py-1.5 text-xs bg-slate-600 text-white rounded-lg hover:bg-slate-700 font-medium disabled:opacity-50">
+            {seeding ? 'Seeding...' : '초기 데이터 Seed'}
+          </button>
+        </div>
+      </div>
+
+      {/* Sub Tabs */}
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+        {MPOB_CATEGORIES.map(c => (
+          <button key={c.id} onClick={() => setSubTab(c.id)}
+            className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+              subTab === c.id ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      {loading ? (
+        <div className="space-y-4">{[...Array(2)].map((_, i) => <Shimmer key={i} className="h-60" />)}</div>
+      ) : (
+        <>
+          {categoriesToFetch.map(cat => {
+            const rows = data[cat] || [];
+            if (rows.length === 0 && subTab !== 'all') {
+              return (
+                <div key={cat} className="card p-8 text-center">
+                  <p className="text-slate-500 text-sm">{year}년 데이터가 없습니다.</p>
+                  <p className="text-slate-400 text-xs mt-1">초기 데이터 Seed 버튼을 눌러 데이터를 생성하거나 Bulk 붙여넣기로 입력하세요.</p>
+                </div>
+              );
+            }
+            if (rows.length === 0) return null;
+            const catInfo = MPOB_CATEGORIES.find(c => c.id === cat) || MPOB_CATEGORIES[0];
+            return (
+              <div key={cat}>
+                {subTab === 'all' && (
+                  <h3 className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full" />
+                    {catInfo.label} <span className="text-xs font-normal text-slate-400">({year})</span>
+                  </h3>
+                )}
+                {renderTable(cat, rows, catInfo.aggType, cat === 'export_product')}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* Bulk Paste Modal */}
+      {bulkOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setBulkOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-slate-800">MPOB Bulk 데이터 붙여넣기</h3>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-slate-500">카테고리:</label>
+              <select value={bulkCategory} onChange={e => setBulkCategory(e.target.value)}
+                className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg">
+                <option value="stock">Stock (재고)</option>
+                <option value="production">Production (생산)</option>
+                <option value="export_port">Export by Port</option>
+                <option value="export_product">Export by Product</option>
+              </select>
+              <span className="text-xs text-slate-400">연도: {year}</span>
+            </div>
+            <div>
+              <p className="text-[11px] text-slate-400 mb-2">
+                탭으로 구분된 데이터를 붙여넣으세요. 형식: 항목명 → Jan → Feb → ... → Dec
+              </p>
+              <textarea value={bulkText} onChange={e => setBulkText(e.target.value)}
+                placeholder={"RBD PALM OIL\t110706\t153472\t105394\t\t\t\t\t\t\t\t\t"}
+                className="w-full h-48 px-3 py-2 text-xs border border-slate-200 rounded-lg font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setBulkOpen(false)} className="px-4 py-2 text-xs text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200">취소</button>
+              <button onClick={handleBulkPaste} className="px-4 py-2 text-xs text-white bg-blue-600 rounded-lg hover:bg-blue-700 font-medium">업데이트</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ============ MAIN COMPONENT ============
 
 export default function Home() {
@@ -2880,6 +3365,7 @@ export default function Home() {
     { id: 'purchases', label: '구매 이력', icon: '💰' },
     { id: 'news', label: '뉴스', icon: '📰' },
     { id: 'alerts', label: '알림', icon: '🔔' },
+    { id: 'mpob', label: 'MPOB', icon: '🏛️' },
     { id: 'lc', label: 'LC 개설', icon: '📄' },
     { id: 'doc-verify', label: '서류 검증', icon: '✅' },
   ];
@@ -3001,6 +3487,7 @@ export default function Home() {
           {activeTab === 'purchases' && <PurchasesTab />}
           {activeTab === 'news' && <NewsTab />}
           {activeTab === 'alerts' && <AlertsTab />}
+          {activeTab === 'mpob' && <MPOBTab />}
           {activeTab === 'lc' && <LCTab />}
           {activeTab === 'doc-verify' && <DocVerifyTab />}
         </div>

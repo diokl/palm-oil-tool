@@ -74,6 +74,15 @@ export async function GET() {
       `SELECT * FROM news ORDER BY date DESC LIMIT 5`
     );
 
+    // MPOB Summary (latest year, key items only)
+    const mpobSummary = await dbAll(
+      `SELECT category, item_name, month, value, value_rm
+       FROM mpob_data
+       WHERE year = 2026
+         AND item_name IN ('RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN', 'PFAD', 'MALAYSIA', 'TOTAL')
+       ORDER BY category, item_name, month`
+    );
+
     // Latest AI analysis
     const latestAnalysis = await dbGet(
       `SELECT result FROM analyses ORDER BY created_at DESC LIMIT 1`
@@ -85,6 +94,7 @@ export async function GET() {
       fcpo_latest_date: latestDate?.date,
       inventory_summary: inventorySummary,
       box_ranges: boxRanges,
+      mpob_summary: mpobSummary,
       recent_purchases: recentPurchases,
       recent_news: recentNews,
       ai_analysis: latestAnalysis?.result ? JSON.parse(latestAnalysis.result) : null,
