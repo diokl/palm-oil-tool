@@ -134,6 +134,58 @@ function validateRics(rows: ParsedBMDRow[]): string[] {
   return warnings;
 }
 
+// M1 복구 전용 프롬프트: 페이지 1 하단에서 M1 row만 찾는다
+const M1_RECOVERY_PROMPT = `Look at the BOTTOM of page 1 of this PDF. There is an "RBD PALM OIL" section
+that starts near the bottom of page 1. The FIRST data row right under the "RBD PALM OIL" header and
+the "ASK / RIC" column header is the M1 row with RIC code <PO-MYRBD-M1>.
+
+Return ONLY a JSON object with these fields for that single M1 row:
+- month: the month label (e.g. "March", "April")
+- contract_month: "YYYY-MM" format
+- ask: the ASK price (number)
+- ric: "PO-MYRBD-M1"
+
+Example: {"month":"March","contract_month":"2026-03","ask":1090.00,"ric":"PO-MYRBD-M1"}
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+// Claude API 호출 공통 함수
+async function callClaude(
+  anthropic: Anthropic,
+  base64Data: string,
+  prompt: string,
+): Promise<string> {
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 4096,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
+          },
+          { type: 'text', text: prompt },
+        ],
+      },
+    ],
+  });
+  return message.content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('');
+}
+
+// Claude 응답 텍스트에서 JSON 추출
+function extractJson(responseText: string): string {
+  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) return jsonMatch[1].trim();
+  const objMatch = responseText.match(/\{[\s\S]*\}/);
+  if (objMatch) return objMatch[0];
+  return responseText;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -152,66 +204,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'ANTHROPIC_API_KEY가 설정되지 않았습니다' }, { status: 500 });
     }
 
-    // PDF를 base64로 변환
     const arrayBuffer = await file.arrayBuffer();
     const base64Data = Buffer.from(arrayBuffer).toString('base64');
-
-    // Claude API로 PDF 내용 추출
     const anthropic = new Anthropic({ apiKey });
 
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'document',
-              source: {
-                type: 'base64',
-                media_type: 'application/pdf',
-                data: base64Data,
-              },
-            },
-            {
-              type: 'text',
-              text: EXTRACTION_PROMPT,
-            },
-          ],
-        },
-      ],
-    });
+    // 1차 추출
+    const responseText = await callClaude(anthropic, base64Data, EXTRACTION_PROMPT);
+    const parsed: ParsedBMDData = JSON.parse(extractJson(responseText));
+    let rawRows = Array.isArray(parsed.rbd_palm_oil) ? parsed.rbd_palm_oil : [];
 
-    // Claude 응답에서 JSON 추출
-    const responseText = message.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
-
-    // JSON 파싱 (코드블록 안에 있을 수 있으므로 추출)
-    let jsonStr = responseText;
-    const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    } else {
-      // Try to find JSON object directly
-      const objMatch = responseText.match(/\{[\s\S]*\}/);
-      if (objMatch) {
-        jsonStr = objMatch[0];
+    // M1 누락 감지 → 자동 재시도
+    const foundRics = new Set(rawRows.map((r) => (r.ric || '').replace(/[<>]/g, '').trim()));
+    if (!foundRics.has('PO-MYRBD-M1') && rawRows.length > 0) {
+      console.log('[BMD parser] M1 missing — attempting recovery...');
+      try {
+        const m1Text = await callClaude(anthropic, base64Data, M1_RECOVERY_PROMPT);
+        const m1Row: ParsedBMDRow = JSON.parse(extractJson(m1Text));
+        if (m1Row && m1Row.ask && m1Row.contract_month) {
+          // M1을 맨 앞에 삽입
+          m1Row.ric = m1Row.ric || 'PO-MYRBD-M1';
+          rawRows = [m1Row, ...rawRows];
+          console.log('[BMD parser] M1 recovered:', m1Row.contract_month, m1Row.ask);
+        }
+      } catch (e) {
+        console.warn('[BMD parser] M1 recovery failed:', (e as Error).message);
       }
     }
 
-    const parsed: ParsedBMDData = JSON.parse(jsonStr);
-
-    // 1) RIC 6종(M1~M3, Q1~Q3)이 다 있는지 검증 → 누락 있으면 warnings에 담아서 전달
-    const rawRows = Array.isArray(parsed.rbd_palm_oil) ? parsed.rbd_palm_oil : [];
     const warnings = validateRics(rawRows);
-
-    // 2) 분기 row(Q1/Q2/Q3)를 3개월로 펼침. 일반 월 row는 그대로 유지.
-    //    예) Jul/Aug/Sep 1195 → 2026-07, 2026-08, 2026-09 세 건이 각각 1195로 저장됨.
-    //    Q3(Jan/Feb/Mar)는 Claude가 이미 다음 해 연도로 contract_month를 만들어 주므로
-    //    expandQuarterRows 내부의 month+1 롤오버 로직이 자동으로 처리한다.
     const expanded = expandQuarterRows(rawRows);
 
     return NextResponse.json({
@@ -225,7 +245,6 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('BMD PDF parse error:', error);
 
-    // 더 구체적인 에러 메시지
     let errorMsg = error.message || 'Unknown error';
     if (errorMsg.includes('authentication') || errorMsg.includes('api_key')) {
       errorMsg = 'Anthropic API 키가 유효하지 않습니다';
