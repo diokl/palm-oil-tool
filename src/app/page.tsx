@@ -80,9 +80,16 @@ interface DashboardData {
   recent_news: NewsItem[];
   ai_analysis: string | null;
   prebuy_effect: {
-    total_effect_krw: number;
-    month_count: number;
-    success_count: number;
+    months: Array<{
+      shipment_month: string;
+      rbd_qty: number; rbd_amount: number;
+      rbd_effect_usd: number; rbd_effect_krw: number;
+      rspo_qty: number; rspo_amount: number;
+      rspo_effect_usd: number; rspo_effect_krw: number;
+      total_qty: number; total_amount: number;
+      effect_usd: number; effect_krw: number;
+      market_price: number; exchange_rate: number;
+    }>;
     total_records: number;
   } | null;
 }
@@ -537,6 +544,110 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
   );
 };
 
+// ============ DASHBOARD PREBUY TABLE ============
+
+interface PrebuyMonthDetail {
+  shipment_month: string;
+  rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
+  rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+  total_qty: number; total_amount: number; effect_usd: number; effect_krw: number;
+  market_price: number; exchange_rate: number;
+}
+
+const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, totalRecords }: {
+  months: PrebuyMonthDetail[]; allMonths: string[]; defaultFrom: string; defaultTo: string; totalRecords: number;
+}) => {
+  const [periodFrom, setPeriodFrom] = useState(defaultFrom);
+  const [periodTo, setPeriodTo] = useState(defaultTo);
+
+  const filtered = months.filter(m => m.shipment_month >= periodFrom && m.shipment_month <= periodTo);
+
+  const rbdQty = filtered.reduce((s, m) => s + m.rbd_qty, 0);
+  const rbdAmount = filtered.reduce((s, m) => s + m.rbd_amount, 0);
+  const rbdEffectUsd = filtered.reduce((s, m) => s + m.rbd_effect_usd, 0);
+  const rbdEffectKrw = filtered.reduce((s, m) => s + m.rbd_effect_krw, 0);
+
+  const rspoQty = filtered.reduce((s, m) => s + m.rspo_qty, 0);
+  const rspoAmount = filtered.reduce((s, m) => s + m.rspo_amount, 0);
+  const rspoEffectUsd = filtered.reduce((s, m) => s + m.rspo_effect_usd, 0);
+  const rspoEffectKrw = filtered.reduce((s, m) => s + m.rspo_effect_krw, 0);
+
+  const totalQty = rbdQty + rspoQty;
+  const totalAmount = rbdAmount + rspoAmount;
+  const totalEffectUsd = rbdEffectUsd + rspoEffectUsd;
+  const totalEffectKrw = rbdEffectKrw + rspoEffectKrw;
+
+  const fmtNum = (n: number) => n === 0 ? '-' : n.toLocaleString('ko-KR', { maximumFractionDigits: 0 });
+  const fmtUsd = (n: number) => n === 0 ? '-' : `$${n.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}`;
+  const fmtKrw2 = (n: number) => {
+    if (n === 0) return '-';
+    const abs = Math.abs(n);
+    if (abs >= 100000000) return `${n < 0 ? '-' : ''}₩${(abs / 100000000).toFixed(1)}억`;
+    return `${n < 0 ? '-' : ''}₩${(abs / 1000000).toFixed(1)}M`;
+  };
+
+  const evalLabel = (krw: number) => krw < 0 ? '절감' : krw > 0 ? '초과' : '-';
+  const evalColor = (krw: number) => krw < 0 ? 'text-emerald-600 font-semibold' : krw > 0 ? 'text-rose-500 font-semibold' : 'text-slate-400';
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-slate-700">선구매 실적 ({periodFrom} ~ {periodTo})</h3>
+        <div className="flex items-center gap-2 text-xs">
+          <select value={periodFrom} onChange={e => setPeriodFrom(e.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs">
+            {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <span className="text-slate-400">~</span>
+          <select value={periodTo} onChange={e => setPeriodTo(e.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs">
+            {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="card overflow-hidden">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-100">
+              <th className="px-3 py-2 text-left font-medium text-slate-500">구분</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-500">수량(MT)</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-500">계약금액(USD)</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-500">효과(USD)</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-500">효과(KRW)</th>
+              <th className="px-3 py-2 text-center font-medium text-slate-500">평가</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b border-slate-50 hover:bg-slate-50/50">
+              <td className="px-3 py-2 font-medium text-slate-700">RBD Palm Oil</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtNum(rbdQty)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(rbdAmount)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rbdEffectUsd)}`}>{fmtUsd(rbdEffectUsd)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rbdEffectKrw)}`}>{fmtKrw2(rbdEffectKrw)}</td>
+              <td className={`px-3 py-2 text-center ${evalColor(rbdEffectKrw)}`}>{evalLabel(rbdEffectKrw)}</td>
+            </tr>
+            <tr className="border-b border-slate-50 hover:bg-slate-50/50">
+              <td className="px-3 py-2 font-medium text-slate-700">RSPO(MB)</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtNum(rspoQty)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(rspoAmount)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectUsd)}`}>{fmtUsd(rspoEffectUsd)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectKrw)}`}>{fmtKrw2(rspoEffectKrw)}</td>
+              <td className={`px-3 py-2 text-center ${evalColor(rspoEffectKrw)}`}>{evalLabel(rspoEffectKrw)}</td>
+            </tr>
+            <tr className="bg-slate-50/80 font-semibold">
+              <td className="px-3 py-2 text-slate-800">합계</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtNum(totalQty)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(totalAmount)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(totalEffectUsd)}`}>{fmtUsd(totalEffectUsd)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(totalEffectKrw)}`}>{fmtKrw2(totalEffectKrw)}</td>
+              <td className={`px-3 py-2 text-center ${evalColor(totalEffectKrw)}`}>{evalLabel(totalEffectKrw)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10px] text-slate-400 mt-1 text-right">총 {totalRecords}건 기준 · 효과 = 계약금액 - (시황가 × 물량) × 환율</p>
+    </div>
+  );
+};
+
 // ============ TAB COMPONENTS ============
 
 const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | null; loading: boolean; onNavigate?: (tab: Tab) => void }) => {
@@ -830,27 +941,14 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         </div>
       </div>
 
-      {/* Prebuy Effect Summary */}
-      {data.prebuy_effect && (
-        <div>
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">총 효과 분석</h3>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard
-              label="총 선구매 효과"
-              value={formatKRW(data.prebuy_effect.total_effect_krw)}
-              accent={data.prebuy_effect.total_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}
-            />
-            <MetricCard label="구매 건수" value={`${data.prebuy_effect.total_records}건`} />
-            <MetricCard label="분석 대상월" value={`${data.prebuy_effect.month_count}개월`} />
-            <MetricCard
-              label="절감 성공률"
-              value={data.prebuy_effect.month_count > 0 ? `${Math.round(data.prebuy_effect.success_count / data.prebuy_effect.month_count * 100)}%` : '-'}
-              unit={`${data.prebuy_effect.success_count}/${data.prebuy_effect.month_count}`}
-              accent="text-emerald-600"
-            />
-          </div>
-        </div>
-      )}
+      {/* Prebuy Effect Summary — Table Format */}
+      {data.prebuy_effect && data.prebuy_effect.months.length > 0 && (() => {
+        const months = data.prebuy_effect!.months;
+        const allMonths = months.map(m => m.shipment_month).sort();
+        const defaultFrom = allMonths.length >= 3 ? allMonths[allMonths.length - 3] : allMonths[0];
+        const defaultTo = allMonths[allMonths.length - 1];
+        return <DashboardPrebuyTable months={months} allMonths={allMonths} defaultFrom={defaultFrom} defaultTo={defaultTo} totalRecords={data.prebuy_effect!.total_records} />;
+      })()}
 
       {/* Recent Purchases */}
       <div>
