@@ -1830,9 +1830,11 @@ const PurchasesTab = () => {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
-  // Prebuy sub-tab & excluded months
+  // Prebuy sub-tab & excluded months & period filter
   const [prebuyView, setPrebuyView] = useState<'total' | 'rbd' | 'rspo'>('total');
   const [excludedMonths, setExcludedMonths] = useState<Set<string>>(new Set());
+  const [periodFrom, setPeriodFrom] = useState<string>('');
+  const [periodTo, setPeriodTo] = useState<string>('');
   const toggleExclude = (month: string) => {
     setExcludedMonths(prev => {
       const next = new Set(prev);
@@ -2301,52 +2303,50 @@ const PurchasesTab = () => {
 
       {/* ===== PREBUY VIEW ===== */}
       {subTab === 'prebuy' && (() => {
-        // Determine which rows to show based on prebuyView
+        // Available months for period selector
+        const allMonths = prebuyData.map(r => r.shipment_month).sort();
+        const pFrom = periodFrom || allMonths[0] || '';
+        const pTo = periodTo || allMonths[allMonths.length - 1] || '';
+
+        // Filter by period
+        const inPeriod = (m: string) => m >= pFrom && m <= pTo;
+
+        // For product views
         const sourceRows: PrebuyRow[] =
           prebuyView === 'rbd' ? (rbdPrebuy?.rows || []) :
           prebuyView === 'rspo' ? (rspoPrebuy?.rows || []) :
           prebuyData;
-        const isProductView = prebuyView === 'rbd' || prebuyView === 'rspo';
+        const periodRows = sourceRows.filter(r => inPeriod(r.shipment_month));
 
-        // Recalculate with exclusions
-        const activeRows = sourceRows.filter(r => !excludedMonths.has(r.shipment_month));
+        // Recalculate with exclusions for product views
         let recalcCum = 0;
-        const displayRows = sourceRows.map(r => {
+        const displayRows = periodRows.map(r => {
           const excluded = excludedMonths.has(r.shipment_month);
           if (!excluded) recalcCum += r.effect_krw;
           return { ...r, _excluded: excluded, _cumulative: excluded ? null : recalcCum };
         });
-        const filteredEffect = activeRows.reduce((s, r) => s + r.effect_krw, 0);
 
-        // Section totals for summary cards
-        const rbdEffect = rbdPrebuy?.total_effect_krw ?? 0;
-        const rspoEffect = rspoPrebuy?.total_effect_krw ?? 0;
-        const totalEffect = prebuySummary?.total_effect_krw ?? 0;
+        // Summary for total view: aggregate RBD, RSPO, combined within period
+        const rbdRows = (rbdPrebuy?.rows || []).filter(r => inPeriod(r.shipment_month) && !excludedMonths.has(r.shipment_month));
+        const rspoRows = (rspoPrebuy?.rows || []).filter(r => inPeriod(r.shipment_month) && !excludedMonths.has(r.shipment_month));
+        const combinedRows = prebuyData.filter(r => inPeriod(r.shipment_month) && !excludedMonths.has(r.shipment_month));
+
+        const sumUp = (rows: PrebuyRow[]) => ({
+          qty: rows.reduce((s, r) => s + (r.qty ?? r.total_qty ?? 0), 0),
+          amount: rows.reduce((s, r) => s + (r.amount ?? r.total_amount ?? 0), 0),
+          effectKrw: rows.reduce((s, r) => s + r.effect_krw, 0),
+          effectUsd: rows.reduce((s, r) => s + r.effect_usd, 0),
+          months: rows.length,
+          success: rows.filter(r => r.effect_krw < 0).length,
+        });
+        const rbdSum = sumUp(rbdRows);
+        const rspoSum = sumUp(rspoRows);
+        const totalSum = sumUp(combinedRows);
 
         return (
         <>
-          {/* Summary Cards: RBD / RSPO / Total */}
-          <div className="grid grid-cols-3 gap-3 md:gap-4">
-            <MetricCard
-              label="RBD 선구매 효과"
-              value={formatKRW(rbdEffect)}
-              accent={rbdEffect < 0 ? 'text-emerald-600' : 'text-rose-500'}
-            />
-            <MetricCard
-              label="RSPO(MB) 선구매 효과"
-              value={formatKRW(rspoEffect)}
-              accent={rspoEffect < 0 ? 'text-emerald-600' : 'text-rose-500'}
-            />
-            <MetricCard
-              label="총 효과 분석"
-              value={formatKRW(excludedMonths.size > 0 ? filteredEffect : totalEffect)}
-              accent={(excludedMonths.size > 0 ? filteredEffect : totalEffect) < 0 ? 'text-emerald-600' : 'text-rose-500'}
-              unit={excludedMonths.size > 0 ? `${excludedMonths.size}개월 제외` : undefined}
-            />
-          </div>
-
-          {/* Prebuy sub-tabs: Total / RBD / RSPO */}
-          <div className="flex items-center gap-2">
+          {/* Prebuy sub-tabs */}
+          <div className="flex items-center gap-2 flex-wrap">
             {(['total', 'rbd', 'rspo'] as const).map(v => (
               <button key={v} onClick={() => setPrebuyView(v)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
@@ -2360,96 +2360,290 @@ const PurchasesTab = () => {
                 제외 초기화 ({excludedMonths.size})
               </button>
             )}
+
+            {/* Period Selector */}
+            <div className="ml-auto flex items-center gap-2 text-xs">
+              <span className="text-slate-500">기간:</span>
+              <select value={pFrom} onChange={e => setPeriodFrom(e.target.value)}
+                className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+                {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <span className="text-slate-400">~</span>
+              <select value={pTo} onChange={e => setPeriodTo(e.target.value)}
+                className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+                {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
           </div>
 
-          {/* Prebuy Table */}
-          {sourceRows.length === 0 ? (
-            <div className="card p-8 text-center">
-              <p className="text-slate-500 text-sm">
-                {prebuyView === 'rbd' ? 'RBD' : prebuyView === 'rspo' ? 'RSPO(MB)' : ''} 선구매 효과 데이터가 없습니다
-              </p>
-              <p className="text-slate-400 text-xs mt-1">구매현황 RAW에서 데이터를 먼저 등록하세요</p>
-            </div>
-          ) : (
-            <div className="card overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="px-2 py-3 text-center font-semibold text-slate-400 w-8" title="제외 토글"></th>
-                      <th className="px-3 py-3 text-left font-semibold text-slate-500 uppercase tracking-wider">선적월</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">수량(MT)</th>
-                      {!isProductView && <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RBD(MT)</th>}
-                      {!isProductView && <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RSPO(MT)</th>}
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">가중평균가</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">시황가</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">가격차</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">효과(KRW)</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">누적효과</th>
-                      <th className="px-3 py-3 text-center font-semibold text-slate-500 uppercase tracking-wider">평가</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {displayRows.map((row) => {
-                      const excluded = (row as any)._excluded;
-                      const cumVal = (row as any)._cumulative;
-                      const isEditing = editingMarket === row.shipment_month;
-                      const qty = isProductView ? (row.qty ?? 0) : (row.total_qty ?? 0);
-                      return (
-                        <tr key={row.shipment_month} className={`transition-colors ${excluded ? 'opacity-40 bg-slate-50 line-through' : 'hover:bg-slate-50/60'}`}>
-                          <td className="px-2 py-2.5 text-center">
-                            <input type="checkbox" checked={!excluded} onChange={() => toggleExclude(row.shipment_month)}
-                              className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" title={excluded ? '포함하기' : '제외하기'} />
-                          </td>
-                          <td className="px-3 py-2.5 font-medium text-slate-700">{row.shipment_month}</td>
-                          <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right font-medium">{formatNumber(qty, 0)}</td>
-                          {!isProductView && <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rbd_qty ?? 0, 0)}</td>}
-                          {!isProductView && <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rspo_qty ?? 0, 0)}</td>}
-                          <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
-                          <td className="px-3 py-2.5 tabular-nums text-right">
-                            {isEditing ? (
-                              <div className="flex items-center gap-1 justify-end">
-                                <input type="number" step="0.1" value={marketInput}
-                                  onChange={(e) => setMarketInput(e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') handleMarketPriceSave(row.shipment_month); if (e.key === 'Escape') setEditingMarket(null); }}
-                                  className="w-20 px-1.5 py-1 border border-blue-300 rounded text-xs text-right bg-white" autoFocus />
-                                <button onClick={() => handleMarketPriceSave(row.shipment_month)} disabled={savingMarket} className="text-blue-600 hover:text-blue-800 text-[10px] font-medium">
-                                  {savingMarket ? '...' : '저장'}
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="cursor-pointer text-blue-600 hover:text-blue-800 hover:underline"
-                                onClick={() => { setEditingMarket(row.shipment_month); setMarketInput(row.market_price?.toString() || ''); }}
-                                title="클릭하여 시황가 수정">
-                                ${formatNumber(row.market_price, 2)}
-                              </span>
-                            )}
-                          </td>
-                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.price_diff < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            {row.price_diff < 0 ? '▼' : '▲'} ${formatNumber(Math.abs(row.price_diff), 2)}
-                          </td>
-                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            {formatKRW(row.effect_krw)}
-                          </td>
-                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${excluded ? 'text-slate-400' : (cumVal ?? 0) < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            {excluded ? '-' : formatKRW(cumVal)}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {!excluded && (
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                                row.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                              }`}>{row.evaluation}</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+          {/* ===== 총 효과 분석 — Summary Table ===== */}
+          {prebuyView === 'total' && (
+            <>
+              {/* Summary Table: RBD / RSPO / 합계 */}
+              <div className="card overflow-hidden">
+                <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
+                  <p className="text-sm font-semibold text-slate-700">선구매 실적 요약 ({pFrom} ~ {pTo})</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50/50 border-b border-slate-200">
+                        <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">구분</th>
+                        <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">수량(MT)</th>
+                        <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">계약금액(USD)</th>
+                        <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">효과(USD)</th>
+                        <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">효과(KRW)</th>
+                        <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">대상월</th>
+                        <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">성공률</th>
+                        <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">평가</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {/* RBD */}
+                      <tr className="hover:bg-slate-50/60">
+                        <td className="px-5 py-3.5 font-medium text-slate-800">
+                          <span className="bg-blue-50 text-blue-700 px-2.5 py-0.5 rounded-full text-xs font-medium">RBD Palm Oil</span>
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">{formatNumber(rbdSum.qty, 0)}</td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">${formatNumber(rbdSum.amount, 0)}</td>
+                        <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${rbdSum.effectUsd < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          ${formatNumber(rbdSum.effectUsd, 0)}
+                        </td>
+                        <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${rbdSum.effectKrw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          {formatKRW(rbdSum.effectKrw)}
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-600 text-center">{rbdSum.months}개월</td>
+                        <td className="px-5 py-3.5 tabular-nums text-center">
+                          {rbdSum.months > 0 ? `${Math.round(rbdSum.success / rbdSum.months * 100)}%` : '-'}
+                        </td>
+                        <td className="px-5 py-3.5 text-center">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${rbdSum.effectKrw < 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                            {rbdSum.effectKrw < 0 ? '절감' : '초과'}
+                          </span>
+                        </td>
+                      </tr>
+
+                      {/* RSPO */}
+                      <tr className="hover:bg-slate-50/60">
+                        <td className="px-5 py-3.5 font-medium text-slate-800">
+                          <span className="bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full text-xs font-medium">RSPO(MB)</span>
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">{formatNumber(rspoSum.qty, 0)}</td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">${formatNumber(rspoSum.amount, 0)}</td>
+                        <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${rspoSum.effectUsd < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          ${formatNumber(rspoSum.effectUsd, 0)}
+                        </td>
+                        <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${rspoSum.effectKrw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          {formatKRW(rspoSum.effectKrw)}
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-600 text-center">{rspoSum.months}개월</td>
+                        <td className="px-5 py-3.5 tabular-nums text-center">
+                          {rspoSum.months > 0 ? `${Math.round(rspoSum.success / rspoSum.months * 100)}%` : '-'}
+                        </td>
+                        <td className="px-5 py-3.5 text-center">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${rspoSum.effectKrw < 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                            {rspoSum.effectKrw < 0 ? '절감' : '초과'}
+                          </span>
+                        </td>
+                      </tr>
+
+                      {/* Total */}
+                      <tr className="bg-slate-50 font-semibold">
+                        <td className="px-5 py-3.5 text-slate-800">합계</td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-800 text-right">{formatNumber(totalSum.qty, 0)}</td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-800 text-right">${formatNumber(totalSum.amount, 0)}</td>
+                        <td className={`px-5 py-3.5 tabular-nums text-right ${totalSum.effectUsd < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          ${formatNumber(totalSum.effectUsd, 0)}
+                        </td>
+                        <td className={`px-5 py-3.5 tabular-nums text-right ${totalSum.effectKrw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          {formatKRW(totalSum.effectKrw)}
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-600 text-center">{totalSum.months}개월</td>
+                        <td className="px-5 py-3.5 tabular-nums text-center">
+                          {totalSum.months > 0 ? `${Math.round(totalSum.success / totalSum.months * 100)}%` : '-'}
+                        </td>
+                        <td className="px-5 py-3.5 text-center">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${totalSum.effectKrw < 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                            {totalSum.effectKrw < 0 ? '절감' : '초과'}
+                          </span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+
+              {/* Monthly Detail Table (Total combined) */}
+              {periodRows.length > 0 && (
+                <div className="card overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
+                    <p className="text-xs font-semibold text-slate-600">월별 상세</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-50/50 border-b border-slate-200">
+                          <th className="px-2 py-2.5 text-center font-semibold text-slate-400 w-8"></th>
+                          <th className="px-3 py-2.5 text-left font-semibold text-slate-500">선적월</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">RBD(MT)</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">RSPO(MT)</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">합계(MT)</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">가중평균가</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">시황가</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">가격차</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">효과(KRW)</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">누적</th>
+                          <th className="px-3 py-2.5 text-center font-semibold text-slate-500">평가</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {displayRows.map(row => {
+                          const excluded = (row as any)._excluded;
+                          const cumVal = (row as any)._cumulative;
+                          const isEditing = editingMarket === row.shipment_month;
+                          return (
+                            <tr key={row.shipment_month} className={`${excluded ? 'opacity-40 bg-slate-50' : 'hover:bg-slate-50/60'} transition-colors`}>
+                              <td className="px-2 py-2 text-center">
+                                <input type="checkbox" checked={!excluded} onChange={() => toggleExclude(row.shipment_month)}
+                                  className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                              </td>
+                              <td className="px-3 py-2 font-medium text-slate-700">{row.shipment_month}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-600 text-right">{formatNumber(row.rbd_qty ?? 0, 0)}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-600 text-right">{formatNumber(row.rspo_qty ?? 0, 0)}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-800 text-right font-medium">{formatNumber(row.total_qty ?? 0, 0)}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
+                              <td className="px-3 py-2 tabular-nums text-right">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-1 justify-end">
+                                    <input type="number" step="0.1" value={marketInput}
+                                      onChange={(e) => setMarketInput(e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === 'Enter') handleMarketPriceSave(row.shipment_month); if (e.key === 'Escape') setEditingMarket(null); }}
+                                      className="w-20 px-1.5 py-1 border border-blue-300 rounded text-xs text-right bg-white" autoFocus />
+                                    <button onClick={() => handleMarketPriceSave(row.shipment_month)} disabled={savingMarket} className="text-blue-600 text-[10px] font-medium">{savingMarket ? '...' : '저장'}</button>
+                                  </div>
+                                ) : (
+                                  <span className="cursor-pointer text-blue-600 hover:underline"
+                                    onClick={() => { setEditingMarket(row.shipment_month); setMarketInput(row.market_price?.toString() || ''); }}>
+                                    ${formatNumber(row.market_price, 2)}
+                                  </span>
+                                )}
+                              </td>
+                              <td className={`px-3 py-2 tabular-nums font-semibold text-right ${row.price_diff < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {row.price_diff < 0 ? '▼' : '▲'} ${formatNumber(Math.abs(row.price_diff), 2)}
+                              </td>
+                              <td className={`px-3 py-2 tabular-nums font-semibold text-right ${row.effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {formatKRW(row.effect_krw)}
+                              </td>
+                              <td className={`px-3 py-2 tabular-nums font-semibold text-right ${excluded ? 'text-slate-400' : (cumVal ?? 0) < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {excluded ? '-' : formatKRW(cumVal)}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                {!excluded && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${row.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{row.evaluation}</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
           )}
-          <p className="text-xs text-slate-400">* 시황가를 클릭하면 수동 수정 가능. 체크 해제 시 해당 월이 누적효과/총 효과에서 제외됩니다. 효과 = (계약총액 - 시황가×물량) × 환율(1,450)</p>
+
+          {/* ===== RBD / RSPO 개별 탭 — 월별 상세 테이블 ===== */}
+          {(prebuyView === 'rbd' || prebuyView === 'rspo') && (
+            <>
+              {/* Summary card for this product */}
+              <div className="grid grid-cols-3 gap-3">
+                <MetricCard
+                  label={`${prebuyView === 'rbd' ? 'RBD' : 'RSPO(MB)'} 선구매 효과`}
+                  value={formatKRW(prebuyView === 'rbd' ? rbdSum.effectKrw : rspoSum.effectKrw)}
+                  accent={(prebuyView === 'rbd' ? rbdSum.effectKrw : rspoSum.effectKrw) < 0 ? 'text-emerald-600' : 'text-rose-500'}
+                />
+                <MetricCard label="수량" value={`${formatNumber(prebuyView === 'rbd' ? rbdSum.qty : rspoSum.qty, 0)} MT`} />
+                <MetricCard label="성공률" value={(() => {
+                  const s = prebuyView === 'rbd' ? rbdSum : rspoSum;
+                  return s.months > 0 ? `${Math.round(s.success / s.months * 100)}%` : '-';
+                })()} accent="text-emerald-600" />
+              </div>
+
+              {/* Product monthly table */}
+              {periodRows.length === 0 ? (
+                <div className="card p-8 text-center">
+                  <p className="text-slate-500 text-sm">{prebuyView === 'rbd' ? 'RBD' : 'RSPO(MB)'} 데이터가 없습니다</p>
+                </div>
+              ) : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-2 py-2.5 text-center font-semibold text-slate-400 w-8"></th>
+                          <th className="px-3 py-2.5 text-left font-semibold text-slate-500">선적월</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">수량(MT)</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">가중평균가</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">시황가</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">가격차</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">효과(KRW)</th>
+                          <th className="px-3 py-2.5 text-right font-semibold text-slate-500">누적</th>
+                          <th className="px-3 py-2.5 text-center font-semibold text-slate-500">평가</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {displayRows.map(row => {
+                          const excluded = (row as any)._excluded;
+                          const cumVal = (row as any)._cumulative;
+                          const isEditing = editingMarket === row.shipment_month;
+                          return (
+                            <tr key={row.shipment_month} className={`${excluded ? 'opacity-40 bg-slate-50' : 'hover:bg-slate-50/60'} transition-colors`}>
+                              <td className="px-2 py-2 text-center">
+                                <input type="checkbox" checked={!excluded} onChange={() => toggleExclude(row.shipment_month)}
+                                  className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                              </td>
+                              <td className="px-3 py-2 font-medium text-slate-700">{row.shipment_month}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-800 text-right font-medium">{formatNumber(row.qty ?? 0, 0)}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
+                              <td className="px-3 py-2 tabular-nums text-right">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-1 justify-end">
+                                    <input type="number" step="0.1" value={marketInput}
+                                      onChange={(e) => setMarketInput(e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === 'Enter') handleMarketPriceSave(row.shipment_month); if (e.key === 'Escape') setEditingMarket(null); }}
+                                      className="w-20 px-1.5 py-1 border border-blue-300 rounded text-xs text-right bg-white" autoFocus />
+                                    <button onClick={() => handleMarketPriceSave(row.shipment_month)} disabled={savingMarket} className="text-blue-600 text-[10px] font-medium">{savingMarket ? '...' : '저장'}</button>
+                                  </div>
+                                ) : (
+                                  <span className="cursor-pointer text-blue-600 hover:underline"
+                                    onClick={() => { setEditingMarket(row.shipment_month); setMarketInput(row.market_price?.toString() || ''); }}>
+                                    ${formatNumber(row.market_price, 2)}
+                                  </span>
+                                )}
+                              </td>
+                              <td className={`px-3 py-2 tabular-nums font-semibold text-right ${row.price_diff < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {row.price_diff < 0 ? '▼' : '▲'} ${formatNumber(Math.abs(row.price_diff), 2)}
+                              </td>
+                              <td className={`px-3 py-2 tabular-nums font-semibold text-right ${row.effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {formatKRW(row.effect_krw)}
+                              </td>
+                              <td className={`px-3 py-2 tabular-nums font-semibold text-right ${excluded ? 'text-slate-400' : (cumVal ?? 0) < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {excluded ? '-' : formatKRW(cumVal)}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                {!excluded && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${row.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{row.evaluation}</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          <p className="text-xs text-slate-400">* 시황가 클릭 시 수동 수정. 체크 해제 시 해당 월 제외. 효과 = (계약총액 - 시황가×물량) × 환율(1,450)</p>
         </>
         );
       })()}
