@@ -17,27 +17,19 @@ export async function GET(request: NextRequest) {
 }
 
 async function handleRawView() {
-  // Get all purchases ordered by shipment_month DESC, then order_no
   const purchases = await dbAll(
     'SELECT * FROM purchases ORDER BY shipment_month DESC, order_no ASC'
   );
 
-  // Calculate summary
   const totalRecords = purchases.length;
   const totalQtyMt = purchases.reduce((sum: number, p: any) => sum + (p.qty_mt || 0), 0);
   const totalAmountUsd = purchases.reduce((sum: number, p: any) => sum + (p.amount_usd || 0), 0);
 
-  // Group by supplier
   const supplierSummary: Record<string, any> = {};
   purchases.forEach((purchase: any) => {
     const supplier = purchase.supplier || 'Unknown';
     if (!supplierSummary[supplier]) {
-      supplierSummary[supplier] = {
-        supplier,
-        record_count: 0,
-        total_qty_mt: 0,
-        total_amount_usd: 0,
-      };
+      supplierSummary[supplier] = { supplier, record_count: 0, total_qty_mt: 0, total_amount_usd: 0 };
     }
     supplierSummary[supplier].record_count += 1;
     supplierSummary[supplier].total_qty_mt += purchase.qty_mt || 0;
@@ -46,122 +38,163 @@ async function handleRawView() {
 
   return NextResponse.json({
     data: purchases,
-    summary: {
-      total_records: totalRecords,
-      total_qty_mt: totalQtyMt,
-      total_amount_usd: totalAmountUsd,
-    },
+    summary: { total_records: totalRecords, total_qty_mt: totalQtyMt, total_amount_usd: totalAmountUsd },
     supplier_summary: Object.values(supplierSummary),
   });
 }
 
-function calcProductRows(
-  purchases: any[],
-  priceMap: Map<string, any>,
-  productFilter: string | null // null = all
-) {
-  // Group by shipment_month
-  const grouped = new Map<string, any[]>();
-  purchases.forEach((p: any) => {
-    if (productFilter && p.product !== productFilter) return;
-    if (!grouped.has(p.shipment_month)) grouped.set(p.shipment_month, []);
-    grouped.get(p.shipment_month)!.push(p);
-  });
+// ── Per-purchase prebuy effect calculation ──
+// effect per purchase = (market_price_usd × qty_mt - amount_usd)
+// → positive = 절감(시황가보다 싸게 샀음), negative = 초과
+// KRW = effect_usd × exchange_rate
 
-  const rows: any[] = [];
-  let cumEffect = 0;
-  let totalEffect = 0;
+interface PurchaseDetail {
+  id: number;
+  order_no: string | null;
+  product: string;
+  shipment_month: string;
+  supplier: string | null;
+  manufacturer: string | null;
+  product_name: string | null;
+  unit_price: number;
+  qty_mt: number;
+  amount_usd: number;
+  market_price_usd: number | null;
+  effect_usd: number;
+  effect_krw: number;
+}
 
-  for (const [month, monthPurchases] of grouped.entries()) {
-    const mp = priceMap.get(month);
-    const marketPrice = mp?.market_price || 0;
-    const exchangeRate = mp?.exchange_rate || 1450;
-
-    const qty = monthPurchases.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
-    const amount = monthPurchases.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
-    const wavg = qty > 0 ? amount / qty : 0;
-    const diffUsd = amount - marketPrice * qty;
-    const effectKrw = diffUsd * exchangeRate;
-
-    cumEffect += effectKrw;
-    totalEffect += effectKrw;
-
-    rows.push({
-      shipment_month: month,
-      qty, amount, wavg_price: wavg,
-      market_price: marketPrice,
-      price_diff: wavg - marketPrice,
-      effect_usd: diffUsd,
-      effect_krw: effectKrw,
-      exchange_rate: exchangeRate,
-      cumulative_effect_krw: cumEffect,
-      evaluation: effectKrw < 0 ? '성공' : '실패',
-    });
-  }
-
-  return { rows, total_effect_krw: totalEffect };
+interface MonthRow {
+  shipment_month: string;
+  purchases: PurchaseDetail[];
+  // RBD totals
+  rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
+  // RSPO totals
+  rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+  // Combined
+  total_qty: number; total_amount: number;
+  wavg_price: number; avg_market_price: number;
+  effect_usd: number; effect_krw: number;
+  cumulative_effect_krw: number;
+  evaluation: string;
 }
 
 async function handlePrebuySummary() {
-  const purchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month ASC');
-  const marketPrices = await dbAll('SELECT * FROM prebuy_market_prices');
-  const priceMap = new Map(marketPrices.map((mp: any) => [mp.shipment_month, mp]));
+  const purchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month ASC, product ASC, id ASC');
 
-  // Per-product breakdowns
-  const rbd = calcProductRows(purchases, priceMap, 'RBD');
-  const rspo = calcProductRows(purchases, priceMap, 'RSPO');
-
-  // Combined (all products)
+  // Group by shipment_month
   const grouped = new Map<string, any[]>();
   purchases.forEach((p: any) => {
     if (!grouped.has(p.shipment_month)) grouped.set(p.shipment_month, []);
     grouped.get(p.shipment_month)!.push(p);
   });
 
-  const combined: any[] = [];
+  const months: MonthRow[] = [];
   let cumAll = 0;
-  let totalAll = 0;
+
+  // Also build per-product rows
+  const rbdMonths: any[] = [];
+  const rspoMonths: any[] = [];
+  let rbdCum = 0, rspoCum = 0;
+  let rbdTotal = 0, rspoTotal = 0;
+
   for (const [month, monthPurchases] of grouped.entries()) {
-    const mp = priceMap.get(month);
-    const marketPrice = mp?.market_price || 0;
-    const exchangeRate = mp?.exchange_rate || 1450;
-
-    const rbdP = monthPurchases.filter((p: any) => p.product === 'RBD');
-    const rspoP = monthPurchases.filter((p: any) => p.product === 'RSPO');
-
-    const rbdQty = rbdP.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
-    const rbdAmount = rbdP.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
-    const rspoQty = rspoP.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
-    const rspoAmount = rspoP.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
-
-    const totalQty = rbdQty + rspoQty;
-    const totalAmount = rbdAmount + rspoAmount;
-    const wavg = totalQty > 0 ? totalAmount / totalQty : 0;
-    const diffUsd = totalAmount - marketPrice * totalQty;
-    const effectKrw = diffUsd * exchangeRate;
-
-    cumAll += effectKrw;
-    totalAll += effectKrw;
-
-    combined.push({
-      shipment_month: month,
-      rbd_qty: rbdQty, rbd_amount: rbdAmount,
-      rspo_qty: rspoQty, rspo_amount: rspoAmount,
-      total_qty: totalQty, total_amount: totalAmount,
-      wavg_price: wavg, market_price: marketPrice,
-      price_diff: wavg - marketPrice,
-      effect_usd: diffUsd, effect_krw: effectKrw,
-      exchange_rate: exchangeRate,
-      cumulative_effect_krw: cumAll,
-      evaluation: effectKrw < 0 ? '성공' : '실패',
+    // Build per-purchase details
+    const details: PurchaseDetail[] = monthPurchases.map((p: any) => {
+      const mp = p.market_price_usd != null ? Number(p.market_price_usd) : null;
+      const effectUsd = mp != null ? (mp * (p.qty_mt || 0) - (p.amount_usd || 0)) : 0;
+      return {
+        id: p.id, order_no: p.order_no, product: p.product,
+        shipment_month: p.shipment_month, supplier: p.supplier,
+        manufacturer: p.manufacturer, product_name: p.product_name,
+        unit_price: p.unit_price, qty_mt: p.qty_mt, amount_usd: p.amount_usd,
+        market_price_usd: mp,
+        effect_usd: effectUsd,
+        effect_krw: 0, // will be set after exchange_rate is known — but we don't store exchange_rate per-purchase
+      };
     });
+
+    // RBD / RSPO split
+    const rbdP = details.filter(d => d.product === 'RBD');
+    const rspoP = details.filter(d => d.product === 'RSPO');
+
+    const sumGroup = (arr: PurchaseDetail[]) => ({
+      qty: arr.reduce((s, d) => s + (d.qty_mt || 0), 0),
+      amount: arr.reduce((s, d) => s + (d.amount_usd || 0), 0),
+      effectUsd: arr.reduce((s, d) => s + d.effect_usd, 0),
+    });
+
+    const rbdS = sumGroup(rbdP);
+    const rspoS = sumGroup(rspoP);
+    const totalQty = rbdS.qty + rspoS.qty;
+    const totalAmount = rbdS.amount + rspoS.amount;
+    const totalEffectUsd = rbdS.effectUsd + rspoS.effectUsd;
+    const wavg = totalQty > 0 ? totalAmount / totalQty : 0;
+
+    // Average market price across purchases that have one set
+    const withMp = details.filter(d => d.market_price_usd != null);
+    const avgMp = withMp.length > 0
+      ? withMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / withMp.reduce((s, d) => s + d.qty_mt, 0)
+      : 0;
+
+    // NOTE: exchange_rate is no longer stored per-month in DB.
+    // The frontend will provide it. We pass 0 here — frontend applies its own rate.
+    cumAll += totalEffectUsd;
+
+    months.push({
+      shipment_month: month,
+      purchases: details,
+      rbd_qty: rbdS.qty, rbd_amount: rbdS.amount,
+      rbd_effect_usd: rbdS.effectUsd, rbd_effect_krw: 0,
+      rspo_qty: rspoS.qty, rspo_amount: rspoS.amount,
+      rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: 0,
+      total_qty: totalQty, total_amount: totalAmount,
+      wavg_price: wavg, avg_market_price: avgMp,
+      effect_usd: totalEffectUsd, effect_krw: 0,
+      cumulative_effect_krw: 0,
+      evaluation: totalEffectUsd > 0 ? '성공' : '실패',
+    });
+
+    // Per-product monthly row
+    if (rbdS.qty > 0) {
+      const rbdWavg = rbdS.qty > 0 ? rbdS.amount / rbdS.qty : 0;
+      const rbdMp = rbdP.filter(d => d.market_price_usd != null);
+      const rbdAvgMp = rbdMp.length > 0 ? rbdMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / rbdMp.reduce((s, d) => s + d.qty_mt, 0) : 0;
+      rbdCum += rbdS.effectUsd;
+      rbdTotal += rbdS.effectUsd;
+      rbdMonths.push({
+        shipment_month: month, qty: rbdS.qty, amount: rbdS.amount,
+        wavg_price: rbdWavg, market_price: rbdAvgMp,
+        price_diff: rbdWavg - rbdAvgMp,
+        effect_usd: rbdS.effectUsd, effect_krw: 0,
+        exchange_rate: 0, cumulative_effect_krw: rbdCum,
+        evaluation: rbdS.effectUsd > 0 ? '성공' : '실패',
+        purchases: rbdP,
+      });
+    }
+    if (rspoS.qty > 0) {
+      const rspoWavg = rspoS.qty > 0 ? rspoS.amount / rspoS.qty : 0;
+      const rspoMp = rspoP.filter(d => d.market_price_usd != null);
+      const rspoAvgMp = rspoMp.length > 0 ? rspoMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / rspoMp.reduce((s, d) => s + d.qty_mt, 0) : 0;
+      rspoCum += rspoS.effectUsd;
+      rspoTotal += rspoS.effectUsd;
+      rspoMonths.push({
+        shipment_month: month, qty: rspoS.qty, amount: rspoS.amount,
+        wavg_price: rspoWavg, market_price: rspoAvgMp,
+        price_diff: rspoWavg - rspoAvgMp,
+        effect_usd: rspoS.effectUsd, effect_krw: 0,
+        exchange_rate: 0, cumulative_effect_krw: rspoCum,
+        evaluation: rspoS.effectUsd > 0 ? '성공' : '실패',
+        purchases: rspoP,
+      });
+    }
   }
 
   return NextResponse.json({
-    data: combined,
-    rbd: { rows: rbd.rows, total_effect_krw: rbd.total_effect_krw },
-    rspo: { rows: rspo.rows, total_effect_krw: rspo.total_effect_krw },
-    summary: { total_effect_krw: totalAll },
+    data: months,
+    rbd: { rows: rbdMonths, total_effect_usd: rbdTotal },
+    rspo: { rows: rspoMonths, total_effect_usd: rspoTotal },
+    summary: { total_effect_usd: cumAll },
   });
 }
 
@@ -169,23 +202,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
-      order_no,
-      product,
-      shipment_month,
-      supplier,
-      manufacturer,
-      product_name,
-      unit_price,
-      qty_mt,
-      amount_usd,
-      incoterms,
-      payment_terms,
-      etd,
-      contract_number,
-      notes,
+      order_no, product, shipment_month, supplier, manufacturer,
+      product_name, unit_price, qty_mt, amount_usd, incoterms,
+      payment_terms, etd, contract_number, notes, market_price_usd,
     } = body;
 
-    // Validate required fields
     if (!product || !shipment_month || !unit_price || !qty_mt) {
       return NextResponse.json(
         { error: 'Required fields: product, shipment_month, unit_price, qty_mt' },
@@ -193,30 +214,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Auto-calculate amount_usd if not provided
     const finalAmountUsd = amount_usd ?? unit_price * qty_mt;
 
     await dbRun(
       `INSERT INTO purchases (
         order_no, product, shipment_month, supplier, manufacturer,
         product_name, unit_price, qty_mt, amount_usd, incoterms,
-        payment_terms, etd, contract_number, notes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        payment_terms, etd, contract_number, notes, market_price_usd, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
-        order_no || null,
-        product,
-        shipment_month,
-        supplier || null,
-        manufacturer || null,
-        product_name || null,
-        unit_price,
-        qty_mt,
-        finalAmountUsd,
-        incoterms || null,
-        payment_terms || null,
-        etd || null,
-        contract_number || null,
-        notes || null,
+        order_no || null, product, shipment_month, supplier || null,
+        manufacturer || null, product_name || null, unit_price, qty_mt,
+        finalAmountUsd, incoterms || null, payment_terms || null,
+        etd || null, contract_number || null, notes || null,
+        market_price_usd ?? null,
       ]
     );
 
@@ -230,20 +241,43 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Handle market price update
-    if (body.action === 'update_market_price') {
-      const { shipment_month, market_price, exchange_rate } = body;
+    // Handle per-purchase market price update
+    if (body.action === 'update_purchase_market_price') {
+      const { id, market_price_usd } = body;
+      if (!id || market_price_usd === undefined) {
+        return NextResponse.json({ error: 'Required: id, market_price_usd' }, { status: 400 });
+      }
+      await dbRun('UPDATE purchases SET market_price_usd = ? WHERE id = ?', [market_price_usd, id]);
+      return NextResponse.json({ success: true });
+    }
 
-      if (!shipment_month || market_price === undefined) {
-        return NextResponse.json(
-          { error: 'Required fields: shipment_month, market_price' },
-          { status: 400 }
+    // Handle bulk market price update for a month (set same price for all purchases in that month+product)
+    if (body.action === 'update_month_market_price') {
+      const { shipment_month, product, market_price_usd } = body;
+      if (!shipment_month || market_price_usd === undefined) {
+        return NextResponse.json({ error: 'Required: shipment_month, market_price_usd' }, { status: 400 });
+      }
+      if (product) {
+        await dbRun(
+          'UPDATE purchases SET market_price_usd = ? WHERE shipment_month = ? AND product = ?',
+          [market_price_usd, shipment_month, product]
+        );
+      } else {
+        await dbRun(
+          'UPDATE purchases SET market_price_usd = ? WHERE shipment_month = ?',
+          [market_price_usd, shipment_month]
         );
       }
+      return NextResponse.json({ success: true });
+    }
 
+    // Legacy: update_market_price for prebuy_market_prices table (backward compat)
+    if (body.action === 'update_market_price') {
+      const { shipment_month, market_price, exchange_rate } = body;
+      if (!shipment_month || market_price === undefined) {
+        return NextResponse.json({ error: 'Required fields: shipment_month, market_price' }, { status: 400 });
+      }
       const finalExchangeRate = exchange_rate ?? 1450;
-
-      // Upsert into prebuy_market_prices
       await dbRun(
         `INSERT INTO prebuy_market_prices (shipment_month, market_price, exchange_rate, updated_at)
          VALUES (?, ?, ?, NOW())
@@ -253,18 +287,15 @@ export async function PUT(request: NextRequest) {
            updated_at = NOW()`,
         [shipment_month, market_price, finalExchangeRate]
       );
-
       return NextResponse.json({ success: true });
     }
 
     // Handle purchase update
     const { id, ...fields } = body;
-
     if (!id) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
 
-    // Build update query
     const updateKeys = Object.keys(fields);
     if (updateKeys.length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });

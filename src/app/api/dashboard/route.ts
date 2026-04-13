@@ -93,12 +93,10 @@ export async function GET() {
       `SELECT result FROM analyses ORDER BY created_at DESC LIMIT 1`
     ) as { result: string } | undefined;
 
-    // Prebuy effect — monthly detail by product
+    // Prebuy effect — per-purchase market_price_usd based
     let prebuyEffect = null;
     try {
       const allPurchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month ASC');
-      const marketPrices = await dbAll('SELECT * FROM prebuy_market_prices');
-      const priceMap = new Map(marketPrices.map((mp: any) => [mp.shipment_month, mp]));
 
       // Group by month
       const grouped = new Map<string, any[]>();
@@ -109,35 +107,34 @@ export async function GET() {
 
       const months: any[] = [];
       for (const [month, purchases] of grouped.entries()) {
-        const mp = priceMap.get(month);
-        const marketPrice = mp?.market_price || 0;
-        const exchangeRate = mp?.exchange_rate || 1450;
-
         const rbdP = purchases.filter((p: any) => p.product === 'RBD');
         const rspoP = purchases.filter((p: any) => p.product === 'RSPO');
 
-        const rbdQty = rbdP.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
-        const rbdAmount = rbdP.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
-        const rspoQty = rspoP.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
-        const rspoAmount = rspoP.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
+        // Per-purchase effect: (market_price_usd × qty_mt) - amount_usd
+        const calcGroup = (arr: any[]) => {
+          let qty = 0, amount = 0, effectUsd = 0;
+          for (const p of arr) {
+            qty += p.qty_mt || 0;
+            amount += p.amount_usd || 0;
+            if (p.market_price_usd != null) {
+              effectUsd += (p.market_price_usd * (p.qty_mt || 0)) - (p.amount_usd || 0);
+            }
+          }
+          return { qty, amount, effectUsd };
+        };
 
-        const totalQty = rbdQty + rspoQty;
-        const totalAmount = rbdAmount + rspoAmount;
-        const effectUsd = totalAmount - marketPrice * totalQty;
-        const effectKrw = effectUsd * exchangeRate;
-
-        const rbdEffectUsd = rbdAmount - marketPrice * rbdQty;
-        const rspoEffectUsd = rspoAmount - marketPrice * rspoQty;
+        const rbdS = calcGroup(rbdP);
+        const rspoS = calcGroup(rspoP);
 
         months.push({
           shipment_month: month,
-          rbd_qty: rbdQty, rbd_amount: rbdAmount,
-          rbd_effect_usd: rbdEffectUsd, rbd_effect_krw: rbdEffectUsd * exchangeRate,
-          rspo_qty: rspoQty, rspo_amount: rspoAmount,
-          rspo_effect_usd: rspoEffectUsd, rspo_effect_krw: rspoEffectUsd * exchangeRate,
-          total_qty: totalQty, total_amount: totalAmount,
-          effect_usd: effectUsd, effect_krw: effectKrw,
-          market_price: marketPrice, exchange_rate: exchangeRate,
+          rbd_qty: rbdS.qty, rbd_amount: rbdS.amount,
+          rbd_effect_usd: rbdS.effectUsd,
+          rspo_qty: rspoS.qty, rspo_amount: rspoS.amount,
+          rspo_effect_usd: rspoS.effectUsd,
+          total_qty: rbdS.qty + rspoS.qty,
+          total_amount: rbdS.amount + rspoS.amount,
+          effect_usd: rbdS.effectUsd + rspoS.effectUsd,
         });
       }
 
