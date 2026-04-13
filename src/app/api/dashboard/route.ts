@@ -93,6 +93,41 @@ export async function GET() {
       `SELECT result FROM analyses ORDER BY created_at DESC LIMIT 1`
     ) as { result: string } | undefined;
 
+    // Prebuy effect summary
+    let prebuyEffect = null;
+    try {
+      const allPurchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month ASC');
+      const marketPrices = await dbAll('SELECT * FROM prebuy_market_prices');
+      const priceMap = new Map(marketPrices.map((mp: any) => [mp.shipment_month, mp]));
+
+      let totalEffectKrw = 0;
+      let monthCount = 0;
+      let successCount = 0;
+      const grouped = new Map<string, any[]>();
+      allPurchases.forEach((p: any) => {
+        if (!grouped.has(p.shipment_month)) grouped.set(p.shipment_month, []);
+        grouped.get(p.shipment_month)!.push(p);
+      });
+      for (const [month, purchases] of grouped.entries()) {
+        const mp = priceMap.get(month);
+        if (!mp?.market_price) continue;
+        const totalQty = purchases.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
+        const totalAmount = purchases.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
+        const effect = (totalAmount - mp.market_price * totalQty) * (mp.exchange_rate || 1450);
+        totalEffectKrw += effect;
+        monthCount++;
+        if (effect < 0) successCount++;
+      }
+      prebuyEffect = {
+        total_effect_krw: totalEffectKrw,
+        month_count: monthCount,
+        success_count: successCount,
+        total_records: allPurchases.length,
+      };
+    } catch (e: any) {
+      console.warn('Prebuy effect calc skipped:', e.message);
+    }
+
     return NextResponse.json({
       alerts,
       fcpo_latest: fcpoLatest,
@@ -103,6 +138,7 @@ export async function GET() {
       recent_purchases: recentPurchases,
       recent_news: recentNews,
       ai_analysis: latestAnalysis?.result ? JSON.parse(latestAnalysis.result) : null,
+      prebuy_effect: prebuyEffect,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

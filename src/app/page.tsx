@@ -79,6 +79,12 @@ interface DashboardData {
   recent_purchases: RecentPurchaseItem[];
   recent_news: NewsItem[];
   ai_analysis: string | null;
+  prebuy_effect: {
+    total_effect_krw: number;
+    month_count: number;
+    success_count: number;
+    total_records: number;
+  } | null;
 }
 
 interface FCPOData {
@@ -814,6 +820,28 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
           </div>
         </div>
       </div>
+
+      {/* Prebuy Effect Summary */}
+      {data.prebuy_effect && (
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">선구매 효과</h3>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <MetricCard
+              label="총 선구매 효과"
+              value={formatKRW(data.prebuy_effect.total_effect_krw)}
+              accent={data.prebuy_effect.total_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}
+            />
+            <MetricCard label="구매 건수" value={`${data.prebuy_effect.total_records}건`} />
+            <MetricCard label="분석 대상월" value={`${data.prebuy_effect.month_count}개월`} />
+            <MetricCard
+              label="절감 성공률"
+              value={data.prebuy_effect.month_count > 0 ? `${Math.round(data.prebuy_effect.success_count / data.prebuy_effect.month_count * 100)}%` : '-'}
+              unit={`${data.prebuy_effect.success_count}/${data.prebuy_effect.month_count}`}
+              accent="text-emerald-600"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Recent Purchases */}
       <div>
@@ -1784,6 +1812,13 @@ const PurchasesTab = () => {
   const [marketInput, setMarketInput] = useState('');
   const [savingMarket, setSavingMarket] = useState(false);
 
+  // Bulk upload
+  const [showBulk, setShowBulk] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkPreview, setBulkPreview] = useState<any[] | null>(null);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+
   useEffect(() => { fetchRaw(); fetchPrebuy(); }, []);
 
   const fetchRaw = async () => {
@@ -1900,6 +1935,48 @@ const PurchasesTab = () => {
     }
   };
 
+  const handleBulkPreview = async () => {
+    if (!bulkText.trim()) return;
+    setBulkLoading(true); setBulkMsg(null); setBulkPreview(null);
+    try {
+      const res = await fetch('/api/purchases/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: bulkText, mode: 'preview' }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setBulkPreview(json.data);
+        setBulkMsg(`${json.count}건 파싱 완료. 확인 후 저장하세요.`);
+      } else {
+        setBulkMsg(`파싱 실패: ${json.error}`);
+      }
+    } catch { setBulkMsg('파싱 중 오류 발생'); }
+    finally { setBulkLoading(false); }
+  };
+
+  const handleBulkSave = async () => {
+    if (!bulkText.trim()) return;
+    setBulkLoading(true); setBulkMsg(null);
+    try {
+      const res = await fetch('/api/purchases/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: bulkText, mode: 'insert' }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setBulkMsg(`${json.count}건 저장 완료!`);
+        setBulkText(''); setBulkPreview(null);
+        setShowBulk(false);
+        fetchRaw(); fetchPrebuy();
+      } else {
+        setBulkMsg(`저장 실패: ${json.error}`);
+      }
+    } catch { setBulkMsg('저장 중 오류 발생'); }
+    finally { setBulkLoading(false); }
+  };
+
   const handleMarketPriceSave = async (shipmentMonth: string) => {
     if (!marketInput) return;
     setSavingMarket(true);
@@ -1949,11 +2026,78 @@ const PurchasesTab = () => {
             <button onClick={openAddForm} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm">
               + 구매 추가
             </button>
-            <button onClick={handleSeed} disabled={seeding} className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors shadow-sm">
-              {seeding ? 'Seed 중...' : 'Seed (초기 데이터 투입)'}
+            <button onClick={() => { setShowBulk(!showBulk); setBulkPreview(null); setBulkMsg(null); }} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm">
+              대량 업로드
+            </button>
+            <button onClick={handleSeed} disabled={seeding} className="px-4 py-2 bg-slate-500 text-white rounded-lg text-sm font-medium hover:bg-slate-600 disabled:opacity-50 transition-colors shadow-sm text-xs">
+              {seeding ? 'Seed 중...' : 'Seed (초기화)'}
             </button>
             {seedMsg && <span className="text-xs px-3 py-1.5 rounded-full bg-amber-50 text-amber-700">{seedMsg}</span>}
           </div>
+
+          {/* Bulk Upload Panel */}
+          {showBulk && (
+            <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-4 animate-fade-in">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-700">대량 업로드 (엑셀 붙여넣기)</p>
+                <button onClick={() => { setShowBulk(false); setBulkPreview(null); }} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
+              </div>
+              <p className="text-xs text-slate-500">엑셀에서 데이터 행을 복사하여 아래에 붙여넣기 하세요. 헤더 행은 자동으로 무시됩니다.</p>
+              <textarea
+                value={bulkText}
+                onChange={(e) => { setBulkText(e.target.value); setBulkPreview(null); }}
+                placeholder="엑셀에서 복사한 데이터를 여기에 붙여넣기..."
+                className="w-full h-40 px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-white resize-y"
+              />
+              <div className="flex items-center gap-3">
+                <button onClick={handleBulkPreview} disabled={bulkLoading || !bulkText.trim()} className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 transition-colors">
+                  {bulkLoading ? '파싱 중...' : '미리보기'}
+                </button>
+                {bulkPreview && bulkPreview.length > 0 && (
+                  <button onClick={handleBulkSave} disabled={bulkLoading} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors">
+                    {bulkLoading ? '저장 중...' : `${bulkPreview.length}건 저장`}
+                  </button>
+                )}
+                {bulkMsg && <span className={`text-xs px-3 py-1.5 rounded-full ${bulkMsg.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{bulkMsg}</span>}
+              </div>
+
+              {/* Preview Table */}
+              {bulkPreview && bulkPreview.length > 0 && (
+                <div className="overflow-x-auto max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0">
+                      <tr className="bg-slate-100 border-b border-slate-200">
+                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">No</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">상품</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">선적월</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">공급사</th>
+                        <th className="px-2 py-1.5 text-right font-semibold text-slate-500">단가</th>
+                        <th className="px-2 py-1.5 text-right font-semibold text-slate-500">수량</th>
+                        <th className="px-2 py-1.5 text-right font-semibold text-slate-500">금액</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">Incoterms</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {bulkPreview.map((p: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/60">
+                          <td className="px-2 py-1.5 text-slate-400">{p.order_no || i + 1}</td>
+                          <td className="px-2 py-1.5">
+                            <span className={`font-medium px-1.5 py-0.5 rounded ${p.product === 'RBD' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{p.product}</span>
+                          </td>
+                          <td className="px-2 py-1.5 tabular-nums">{p.shipment_month}</td>
+                          <td className="px-2 py-1.5 text-slate-600">{p.supplier || '-'}</td>
+                          <td className="px-2 py-1.5 tabular-nums text-right">${formatNumber(p.unit_price, 1)}</td>
+                          <td className="px-2 py-1.5 tabular-nums text-right">{formatNumber(p.qty_mt, 1)}</td>
+                          <td className="px-2 py-1.5 tabular-nums text-right">${formatNumber(p.amount_usd, 0)}</td>
+                          <td className="px-2 py-1.5 text-slate-500">{p.incoterms || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Add/Edit Form */}
           {showForm && (

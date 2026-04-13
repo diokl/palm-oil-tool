@@ -1,16 +1,13 @@
 import { NextResponse } from 'next/server';
-import { dbAll, dbBatchRun } from '@/lib/db';
+import { dbAll, dbRun, dbBatchRun } from '@/lib/db';
 import fs from 'fs';
 import path from 'path';
 
 export async function POST() {
   try {
-    // Check if data already exists
-    const existing = await dbAll('SELECT COUNT(*) as cnt FROM purchases');
-    const count = (existing[0] as any)?.cnt || 0;
-    if (count > 0) {
-      return NextResponse.json({ success: true, message: `이미 ${count}건의 데이터가 있습니다`, count });
-    }
+    // Clear existing data and re-seed
+    await dbRun('DELETE FROM purchases');
+    await dbRun('DELETE FROM prebuy_market_prices');
 
     // Load RAW purchase data
     const rawPath = path.join(process.cwd(), 'data', 'purchases_raw.json');
@@ -40,14 +37,16 @@ export async function POST() {
       marketData.map((m: any) => ({
         sql: `INSERT INTO prebuy_market_prices (shipment_month, market_price, exchange_rate, source)
               VALUES (?, ?, ?, 'seed')
-              ON CONFLICT (shipment_month) DO NOTHING`,
+              ON CONFLICT (shipment_month) DO UPDATE SET
+                market_price = EXCLUDED.market_price,
+                exchange_rate = EXCLUDED.exchange_rate`,
         params: [m.shipment_month, m.market_price, m.exchange_rate || 1450],
       }))
     );
 
     return NextResponse.json({
       success: true,
-      message: `Seed 완료: 구매 ${rawData.length}건, 시황가 ${marketData.length}건`,
+      message: `Seed 완료: 구매 ${rawData.length}건, 시황가 ${marketData.length}건 (기존 데이터 초기화됨)`,
       purchases: rawData.length,
       market_prices: marketData.length,
     });
