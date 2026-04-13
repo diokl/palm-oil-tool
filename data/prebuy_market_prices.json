@@ -1,0 +1,77 @@
+[
+  {
+    "shipment_month": "2024-12",
+    "market_price": 1150.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-01",
+    "market_price": 1167.5,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-02",
+    "market_price": 1055.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-03",
+    "market_price": 1137.5,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-04",
+    "market_price": 1130.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-05",
+    "market_price": 1045.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-06",
+    "market_price": 967.5,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-07",
+    "market_price": 1100.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-08",
+    "market_price": 1085.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-10",
+    "market_price": 1040.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-11",
+    "market_price": 1040.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2025-12",
+    "market_price": 1025.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2026-01",
+    "market_price": 1030.0,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2026-02",
+    "market_price": 1097.5,
+    "exchange_rate": 1450
+  },
+  {
+    "shipment_month": "2026-03",
+    "market_price": 1090,
+    "exchange_rate": 1450
+  }
+]

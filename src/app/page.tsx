@@ -47,17 +47,18 @@ interface BoxRangeItem {
 
 interface RecentPurchaseItem {
   id: number;
-  shipment_month: string;
-  contract_date: string;
-  contract_price: number;
-  quantity_mt: number | null;
-  supplier: string | null;
-  market_price: number;
-  price_diff: number;
-  prebuy_effect_krw: number;
-  evaluation: string;
+  order_no: string | null;
   product: string;
-  notes: string;
+  shipment_month: string;
+  supplier: string | null;
+  manufacturer: string | null;
+  product_name: string | null;
+  unit_price: number;
+  qty_mt: number;
+  amount_usd: number;
+  incoterms: string | null;
+  payment_terms: string | null;
+  etd: string | null;
 }
 
 interface MpobSummaryRow {
@@ -156,33 +157,53 @@ interface BoxRangeDetail {
 
 interface PurchaseItem {
   id: number;
-  shipment_month: string;
-  contract_date: string;
-  contract_price: number;
-  quantity_mt: number | null;
-  supplier: string | null;
-  market_price: number;
-  price_diff: number;
-  prebuy_effect_krw: number;
-  evaluation: string;
+  order_no: string | null;
   product: string;
-  notes: string;
+  shipment_month: string;
+  supplier: string | null;
+  manufacturer: string | null;
+  product_name: string | null;
+  unit_price: number;
+  qty_mt: number;
+  amount_usd: number;
   incoterms: string | null;
   payment_terms: string | null;
-  loading_port: string | null;
-  discharge_port: string | null;
+  etd: string | null;
   contract_number: string | null;
+  notes: string | null;
 }
 
-interface PurchasesResponse {
+interface PurchasesRawResponse {
   data: PurchaseItem[];
   summary: {
-    total: number;
-    successful: number;
-    success_rate: string;
-    total_effect: number;
-    avg_diff: number;
+    total_records: number;
+    total_qty_mt: number;
+    total_amount_usd: number;
   };
+  supplier_summary: { supplier: string; record_count: number; total_qty_mt: number; total_amount_usd: number }[];
+}
+
+interface PrebuyRow {
+  shipment_month: string;
+  rbd_qty: number;
+  rbd_amount: number;
+  rspo_qty: number;
+  rspo_amount: number;
+  total_qty: number;
+  total_amount: number;
+  market_price: number;
+  wavg_price: number;
+  price_diff: number;
+  effect_usd: number;
+  effect_krw: number;
+  exchange_rate: number;
+  cumulative_effect_krw: number;
+  evaluation: string;
+}
+
+interface PrebuyResponse {
+  data: PrebuyRow[];
+  summary: { total_effect_krw: number };
 }
 
 interface NewsItem {
@@ -323,12 +344,24 @@ const BoxRangeGauge = ({ data }: { data: BoxRangeDetail }) => {
         <p className="text-3xl font-bold text-slate-900 tabular-nums">{formatPrice(current)}</p>
       </div>
 
-      {/* Zone labels */}
-      <div className="flex justify-between text-xs px-1">
-        <span className="text-emerald-600 font-medium">전량구매</span>
-        <span className="text-blue-600 font-medium">적극매수</span>
-        <span className="text-amber-600 font-medium">모니터링</span>
-        <span className="text-rose-600 font-medium">최소매수</span>
+      {/* Zone labels + price thresholds */}
+      <div className="grid grid-cols-4 gap-1 text-xs px-1">
+        <div className="text-center">
+          <span className="text-emerald-600 font-medium block">전량구매</span>
+          <span className="text-emerald-500 tabular-nums text-[10px]">~${formatPrice(zones.full_buy_upper)}</span>
+        </div>
+        <div className="text-center">
+          <span className="text-blue-600 font-medium block">적극매수</span>
+          <span className="text-blue-500 tabular-nums text-[10px]">~${formatPrice(zones.active_buy_upper)}</span>
+        </div>
+        <div className="text-center">
+          <span className="text-amber-600 font-medium block">모니터링</span>
+          <span className="text-amber-500 tabular-nums text-[10px]">~${formatPrice(zones.monitoring_upper)}</span>
+        </div>
+        <div className="text-center">
+          <span className="text-rose-600 font-medium block">최소매수</span>
+          <span className="text-rose-500 tabular-nums text-[10px]">${formatPrice(zones.monitoring_upper)}~</span>
+        </div>
       </div>
 
       {/* Gradient bar */}
@@ -381,39 +414,23 @@ const RecentPurchasesTable = ({ data, loading }: { data: (PurchaseItem | RecentP
             <tr className="bg-slate-50 border-b border-slate-200">
               <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">상품</th>
               <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">선적월</th>
-              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">계약가</th>
-              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">시장가</th>
-              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">가격차</th>
-              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">효과</th>
-              <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">평가</th>
+              <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">공급사</th>
+              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">단가($/MT)</th>
+              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">수량(MT)</th>
+              <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">금액(USD)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((p) => {
-              const lower = p.price_diff < 0;
-              return (
-                <tr key={p.id} className="hover:bg-slate-50/60 transition-colors">
-                  <td className="px-5 py-3.5 font-medium text-slate-800">{p.product}</td>
-                  <td className="px-5 py-3.5 tabular-nums text-slate-600">{p.shipment_month}</td>
-                  <td className="px-5 py-3.5 tabular-nums text-slate-800 text-right">{formatPrice(p.contract_price)}</td>
-                  <td className="px-5 py-3.5 tabular-nums text-slate-500 text-right">{formatPrice(p.market_price)}</td>
-                  <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${lower ? 'text-emerald-600' : 'text-rose-500'}`}>
-                    {lower ? '▼' : '▲'} {formatPrice(Math.abs(p.price_diff))}
-                  </td>
-                  <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${p.prebuy_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                    {formatKRW(p.prebuy_effect_krw)}
-                  </td>
-                  <td className="px-5 py-3.5 text-center">
-                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                      p.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' :
-                      p.evaluation === '실패' ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-600'
-                    }`}>
-                      {p.evaluation}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
+            {data.map((p) => (
+              <tr key={p.id} className="hover:bg-slate-50/60 transition-colors">
+                <td className="px-5 py-3.5 font-medium text-slate-800">{p.product}</td>
+                <td className="px-5 py-3.5 tabular-nums text-slate-600">{p.shipment_month}</td>
+                <td className="px-5 py-3.5 text-slate-600 text-xs">{p.supplier || '-'}</td>
+                <td className="px-5 py-3.5 tabular-nums text-slate-800 text-right font-medium">{formatPrice(p.unit_price)}</td>
+                <td className="px-5 py-3.5 tabular-nums text-slate-600 text-right">{formatNumber(p.qty_mt, 1)}</td>
+                <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">{formatNumber(p.amount_usd, 0)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -517,6 +534,33 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
 
+  // Easter egg: AI 분석 숨김 (타이틀 5번 클릭 + 비밀번호)
+  const [showAI, setShowAI] = useState(false);
+  const [titleClicks, setTitleClicks] = useState(0);
+  const [showPwModal, setShowPwModal] = useState(false);
+  const [pwInput, setPwInput] = useState('');
+  const titleClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleTitleClick = () => {
+    const next = titleClicks + 1;
+    setTitleClicks(next);
+    if (titleClickTimer.current) clearTimeout(titleClickTimer.current);
+    if (next >= 5) {
+      setShowPwModal(true);
+      setTitleClicks(0);
+    } else {
+      titleClickTimer.current = setTimeout(() => setTitleClicks(0), 2000);
+    }
+  };
+  const handlePwSubmit = () => {
+    if (pwInput === 'tlskqmfh12!@') {
+      setShowAI(true);
+      setShowPwModal(false);
+      setPwInput('');
+    } else {
+      setPwInput('');
+    }
+  };
+
   const handleAnalyze = async () => {
     setAnalyzing(true);
     setAnalysisError('');
@@ -576,6 +620,28 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Password Modal for AI Easter Egg */}
+      {showPwModal && (
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={() => { setShowPwModal(false); setPwInput(''); }}>
+          <div className="bg-white rounded-xl p-6 shadow-xl w-80" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-semibold text-slate-700 mb-3">🔐 인증이 필요합니다</p>
+            <input
+              type="password"
+              value={pwInput}
+              onChange={e => setPwInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handlePwSubmit()}
+              placeholder="비밀번호 입력"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => { setShowPwModal(false); setPwInput(''); }} className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700">취소</button>
+              <button onClick={handlePwSubmit} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">확인</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Alerts */}
       {data.alerts?.filter(a => a.alert_level !== 'normal').map((alert, idx) => (
         <AlertBanner key={idx} alert={alert}
@@ -583,9 +649,14 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         />
       ))}
 
+      {/* Dashboard Title — 5 clicks triggers AI easter egg */}
+      <p className="text-xs text-slate-400 select-none cursor-default" onClick={handleTitleClick}>
+        대시보드
+      </p>
+
       {/* Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-        <MetricCard label="FCPO 근월물 (USD)" value={formatPrice(latestFCPO?.settlement_usd)} unit={`기준일: ${data.fcpo_latest_date || '-'}`} />
+        <MetricCard label="FCPO 시황 (USD)" value={formatPrice(latestFCPO?.settlement_usd)} unit={`기준일: ${data.fcpo_latest_date || '-'}`} />
         <div className="card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between mb-1">
             <p className="text-xs text-slate-500">박스권 위치</p>
@@ -620,8 +691,8 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
           {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
         </div>
         <div className="lg:col-span-2 space-y-5">
-          {/* AI Analysis */}
-          <div className="card p-5">
+          {/* AI Analysis — hidden by default, unlocked via easter egg */}
+          {showAI && <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                 <span className="w-2 h-2 bg-blue-500 rounded-full" />
@@ -728,7 +799,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
             ) : !analyzing && (
               <p className="text-sm text-slate-400">상단의 &quot;분석 실행&quot; 버튼을 눌러 AI 시황 분석을 시작하세요.</p>
             )}
-          </div>
+          </div>}
 
           {/* Recent News */}
           <div className="space-y-3">
@@ -1678,14 +1749,17 @@ const BoxRangeTab = () => {
 };
 
 const emptyPurchaseForm = {
-  product: 'RBD', shipment_month: '', contract_date: '', contract_price: '',
-  quantity_mt: '', supplier: '', market_price: '', notes: '',
-  incoterms: '', payment_terms: '', loading_port: '', discharge_port: '', contract_number: '',
+  order_no: '', product: 'RBD', shipment_month: '', supplier: '', manufacturer: '',
+  product_name: '', unit_price: '', qty_mt: '', amount_usd: '',
+  incoterms: '', payment_terms: '', etd: '', contract_number: '', notes: '',
 };
 
 const PurchasesTab = () => {
+  const [subTab, setSubTab] = useState<'raw' | 'prebuy'>('raw');
   const [purchaseData, setPurchaseData] = useState<PurchaseItem[]>([]);
-  const [summary, setSummary] = useState<any>(null);
+  const [rawSummary, setRawSummary] = useState<PurchasesRawResponse['summary'] | null>(null);
+  const [prebuyData, setPrebuyData] = useState<PrebuyRow[]>([]);
+  const [prebuySummary, setPrebuySummary] = useState<PrebuyResponse['summary'] | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Add/Edit form
@@ -1695,10 +1769,9 @@ const PurchasesTab = () => {
   const [form, setForm] = useState(emptyPurchaseForm);
   const [saving, setSaving] = useState(false);
 
-  // PDF upload
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Seed
+  const [seeding, setSeeding] = useState(false);
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
 
   // Expanded row
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -1706,20 +1779,47 @@ const PurchasesTab = () => {
   // Delete confirm
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
-  useEffect(() => { fetchPurchases(); }, []);
+  // Market price editing
+  const [editingMarket, setEditingMarket] = useState<string | null>(null);
+  const [marketInput, setMarketInput] = useState('');
+  const [savingMarket, setSavingMarket] = useState(false);
 
-  const fetchPurchases = async () => {
+  useEffect(() => { fetchRaw(); fetchPrebuy(); }, []);
+
+  const fetchRaw = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/purchases');
-      const json: PurchasesResponse = await res.json();
+      const res = await fetch('/api/purchases?view=raw');
+      const json: PurchasesRawResponse = await res.json();
       setPurchaseData(json.data || []);
-      setSummary(json.summary || null);
+      setRawSummary(json.summary || null);
     } catch (error) {
       console.error('Failed to fetch purchases:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchPrebuy = async () => {
+    try {
+      const res = await fetch('/api/purchases?view=prebuy');
+      const json: PrebuyResponse = await res.json();
+      setPrebuyData(json.data || []);
+      setPrebuySummary(json.summary || null);
+    } catch (error) {
+      console.error('Failed to fetch prebuy:', error);
+    }
+  };
+
+  const handleSeed = async () => {
+    setSeeding(true); setSeedMsg(null);
+    try {
+      const res = await fetch('/api/purchases/seed', { method: 'POST' });
+      const json = await res.json();
+      setSeedMsg(json.message || 'Seed 완료');
+      fetchRaw(); fetchPrebuy();
+    } catch { setSeedMsg('Seed 실패'); }
+    finally { setSeeding(false); }
   };
 
   const openAddForm = () => {
@@ -1731,19 +1831,20 @@ const PurchasesTab = () => {
 
   const openEditForm = (p: PurchaseItem) => {
     setForm({
+      order_no: p.order_no || '',
       product: p.product || 'RBD',
       shipment_month: p.shipment_month || '',
-      contract_date: p.contract_date || '',
-      contract_price: p.contract_price?.toString() || '',
-      quantity_mt: p.quantity_mt?.toString() || '',
       supplier: p.supplier || '',
-      market_price: p.market_price?.toString() || '',
-      notes: p.notes || '',
+      manufacturer: p.manufacturer || '',
+      product_name: p.product_name || '',
+      unit_price: p.unit_price?.toString() || '',
+      qty_mt: p.qty_mt?.toString() || '',
+      amount_usd: p.amount_usd?.toString() || '',
       incoterms: p.incoterms || '',
       payment_terms: p.payment_terms || '',
-      loading_port: p.loading_port || '',
-      discharge_port: p.discharge_port || '',
+      etd: p.etd || '',
       contract_number: p.contract_number || '',
+      notes: p.notes || '',
     });
     setFormMode('edit');
     setEditId(p.id);
@@ -1751,23 +1852,26 @@ const PurchasesTab = () => {
   };
 
   const handleSave = async () => {
-    if (!form.shipment_month || !form.contract_price) return;
+    if (!form.shipment_month || !form.unit_price || !form.qty_mt) return;
     setSaving(true);
     try {
+      const unitPrice = parseFloat(form.unit_price);
+      const qtyMt = parseFloat(form.qty_mt);
       const payload: any = {
+        order_no: form.order_no || null,
         product: form.product,
         shipment_month: form.shipment_month,
-        contract_date: form.contract_date || null,
-        contract_price: parseFloat(form.contract_price),
-        quantity_mt: form.quantity_mt ? parseFloat(form.quantity_mt) : null,
         supplier: form.supplier || null,
-        market_price: form.market_price ? parseFloat(form.market_price) : null,
-        notes: form.notes || null,
+        manufacturer: form.manufacturer || null,
+        product_name: form.product_name || null,
+        unit_price: unitPrice,
+        qty_mt: qtyMt,
+        amount_usd: form.amount_usd ? parseFloat(form.amount_usd) : unitPrice * qtyMt,
         incoterms: form.incoterms || null,
         payment_terms: form.payment_terms || null,
-        loading_port: form.loading_port || null,
-        discharge_port: form.discharge_port || null,
+        etd: form.etd || null,
         contract_number: form.contract_number || null,
+        notes: form.notes || null,
       };
 
       if (formMode === 'edit' && editId) {
@@ -1778,7 +1882,7 @@ const PurchasesTab = () => {
       }
       setShowForm(false);
       setForm(emptyPurchaseForm);
-      fetchPurchases();
+      fetchRaw(); fetchPrebuy();
     } catch (error) {
       console.error('Failed to save purchase:', error);
     } finally {
@@ -1790,51 +1894,27 @@ const PurchasesTab = () => {
     try {
       await fetch(`/api/purchases?id=${id}`, { method: 'DELETE' });
       setDeleteConfirm(null);
-      fetchPurchases();
+      fetchRaw(); fetchPrebuy();
     } catch (error) {
       console.error('Failed to delete purchase:', error);
     }
   };
 
-  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    setUploadResult(null);
+  const handleMarketPriceSave = async (shipmentMonth: string) => {
+    if (!marketInput) return;
+    setSavingMarket(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch('/api/purchases/upload', { method: 'POST', body: formData });
-      const json = await res.json();
-      if (json.success && json.extracted) {
-        const ext = json.extracted;
-        setForm({
-          product: ext.product || 'RBD',
-          shipment_month: ext.shipment_month || '',
-          contract_date: ext.contract_date || '',
-          contract_price: ext.contract_price?.toString() || '',
-          quantity_mt: ext.quantity_mt?.toString() || '',
-          supplier: ext.supplier || '',
-          market_price: '',
-          notes: '',
-          incoterms: ext.incoterms || '',
-          payment_terms: ext.payment_terms || '',
-          loading_port: ext.loading_port || '',
-          discharge_port: ext.discharge_port || '',
-          contract_number: ext.contract_number || '',
-        });
-        setFormMode('add');
-        setEditId(null);
-        setShowForm(true);
-        setUploadResult(`PDF에서 ${Object.keys(ext).length}개 항목 추출 완료. 내용을 확인 후 저장하세요.`);
-      } else {
-        setUploadResult(`추출 실패: ${json.error || '알 수 없는 오류'}`);
-      }
+      await fetch('/api/purchases', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_market_price', shipment_month: shipmentMonth, market_price: parseFloat(marketInput) }),
+      });
+      setEditingMarket(null);
+      fetchPrebuy();
     } catch (error) {
-      setUploadResult('PDF 업로드 중 오류 발생');
+      console.error('Failed to update market price:', error);
     } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      setSavingMarket(false);
     }
   };
 
@@ -1842,248 +1922,316 @@ const PurchasesTab = () => {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      {/* Summary */}
-      {summary && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-          <MetricCard label="총 구매 건수" value={formatNumber(summary.total)} />
-          <MetricCard label="성공 거래" value={`${summary.successful}건`} unit={`성공률 ${summary.success_rate}`} />
-          <MetricCard label="평균 절감가" value={formatPrice(Math.abs(summary.avg_diff))} accent="text-emerald-600" />
-          <MetricCard label="총 절감효과" value={formatKRW(summary.total_effect)} accent={summary.total_effect < 0 ? 'text-emerald-600' : 'text-rose-500'} />
-        </div>
-      )}
-
-      {/* Action Bar */}
-      <div className="flex items-center gap-3">
-        <button onClick={openAddForm} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm">
-          + 구매 이력 추가
+      {/* Sub-tab selector */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-1">
+        <button onClick={() => setSubTab('raw')} className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${subTab === 'raw' ? 'bg-white text-blue-600 border border-b-0 border-slate-200 -mb-[1px]' : 'text-slate-500 hover:text-slate-700'}`}>
+          구매현황 RAW
         </button>
-        <div className="relative">
-          <input ref={fileInputRef} type="file" accept=".pdf" onChange={handlePdfUpload} className="hidden" />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-            {uploading ? 'SC PDF 분석 중...' : 'SC PDF 업로드'}
-          </button>
-        </div>
-        {uploadResult && (
-          <span className={`text-xs px-3 py-1.5 rounded-full ${uploadResult.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>
-            {uploadResult}
-          </span>
-        )}
+        <button onClick={() => setSubTab('prebuy')} className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${subTab === 'prebuy' ? 'bg-white text-blue-600 border border-b-0 border-slate-200 -mb-[1px]' : 'text-slate-500 hover:text-slate-700'}`}>
+          선구매 효과 분석
+        </button>
       </div>
 
-      {/* Add/Edit Form */}
-      {showForm && (
-        <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-4 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-slate-700">
-              {formMode === 'edit' ? '구매 이력 수정' : '새 구매 이력 등록'}
-            </p>
-            <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
-          </div>
+      {/* ===== RAW VIEW ===== */}
+      {subTab === 'raw' && (
+        <>
+          {/* Summary Cards */}
+          {rawSummary && (
+            <div className="grid grid-cols-3 gap-3 md:gap-4">
+              <MetricCard label="총 구매 건수" value={formatNumber(rawSummary.total_records)} />
+              <MetricCard label="총 수량" value={formatNumber(rawSummary.total_qty_mt, 1)} unit="MT" />
+              <MetricCard label="총 금액" value={`$${formatNumber(rawSummary.total_amount_usd, 0)}`} />
+            </div>
+          )}
 
-          {/* Row 1: Core fields */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">상품 *</label>
-              <select value={form.product} onChange={(e) => setField('product', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                <option value="RBD">RBD</option>
-                <option value="RSPO">RSPO</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">선적월 *</label>
-              <input type="month" value={form.shipment_month} onChange={(e) => setField('shipment_month', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">계약일</label>
-              <input type="date" value={form.contract_date} onChange={(e) => setField('contract_date', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">계약가 ($/MT) *</label>
-              <input type="number" step="0.1" value={form.contract_price} onChange={(e) => setField('contract_price', e.target.value)} placeholder="1010.0" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">수량 (MT)</label>
-              <input type="number" step="0.1" value={form.quantity_mt} onChange={(e) => setField('quantity_mt', e.target.value)} placeholder="500" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">
-                시장가 ($/MT)
-                <span className="text-blue-400 ml-1" title="비워두면 계약일 기준 FCPO에서 자동 매칭">자동</span>
-              </label>
-              <input type="number" step="0.1" value={form.market_price} onChange={(e) => setField('market_price', e.target.value)} placeholder="자동 매칭" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-          </div>
-
-          {/* Row 2: Detail fields */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">공급사</label>
-              <input type="text" value={form.supplier} onChange={(e) => setField('supplier', e.target.value)} placeholder="Wilmar" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Incoterms</label>
-              <select value={form.incoterms} onChange={(e) => setField('incoterms', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                <option value="">선택</option>
-                <option value="CIF">CIF</option>
-                <option value="CFR">CFR</option>
-                <option value="FOB">FOB</option>
-                <option value="DAP">DAP</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">결제조건</label>
-              <input type="text" value={form.payment_terms} onChange={(e) => setField('payment_terms', e.target.value)} placeholder="CAD" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">선적항</label>
-              <input type="text" value={form.loading_port} onChange={(e) => setField('loading_port', e.target.value)} placeholder="Port Klang" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">도착항</label>
-              <input type="text" value={form.discharge_port} onChange={(e) => setField('discharge_port', e.target.value)} placeholder="Incheon" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">계약번호</label>
-              <input type="text" value={form.contract_number} onChange={(e) => setField('contract_number', e.target.value)} placeholder="SC-2026-001" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-            </div>
-          </div>
-
-          {/* Row 3: Notes */}
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">비고</label>
-            <input type="text" value={form.notes} onChange={(e) => setField('notes', e.target.value)} placeholder="메모 사항" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-          </div>
-
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setShowForm(false)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-200">
-              취소
+          {/* Action Bar */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <button onClick={openAddForm} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm">
+              + 구매 추가
             </button>
-            <button
-              onClick={handleSave}
-              disabled={saving || !form.shipment_month || !form.contract_price}
-              className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
-            >
-              {saving ? '저장 중...' : formMode === 'edit' ? '수정 저장' : '등록'}
+            <button onClick={handleSeed} disabled={seeding} className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors shadow-sm">
+              {seeding ? 'Seed 중...' : 'Seed (초기 데이터 투입)'}
             </button>
+            {seedMsg && <span className="text-xs px-3 py-1.5 rounded-full bg-amber-50 text-amber-700">{seedMsg}</span>}
           </div>
-        </div>
+
+          {/* Add/Edit Form */}
+          {showForm && (
+            <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-4 animate-fade-in">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-700">
+                  {formMode === 'edit' ? '구매 이력 수정' : '새 구매 등록'}
+                </p>
+                <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Order No</label>
+                  <input type="text" value={form.order_no} onChange={(e) => setField('order_no', e.target.value)} placeholder="PO-001" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">상품 *</label>
+                  <select value={form.product} onChange={(e) => setField('product', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    <option value="RBD">RBD</option>
+                    <option value="RSPO">RSPO</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">선적월 *</label>
+                  <input type="month" value={form.shipment_month} onChange={(e) => setField('shipment_month', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">단가 ($/MT) *</label>
+                  <input type="number" step="0.1" value={form.unit_price} onChange={(e) => setField('unit_price', e.target.value)} placeholder="1010.0" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">수량 (MT) *</label>
+                  <input type="number" step="0.1" value={form.qty_mt} onChange={(e) => setField('qty_mt', e.target.value)} placeholder="500" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">금액 (USD)</label>
+                  <input type="number" step="0.01" value={form.amount_usd} onChange={(e) => setField('amount_usd', e.target.value)} placeholder="자동계산" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">공급사</label>
+                  <input type="text" value={form.supplier} onChange={(e) => setField('supplier', e.target.value)} placeholder="Wilmar" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">제조사</label>
+                  <input type="text" value={form.manufacturer} onChange={(e) => setField('manufacturer', e.target.value)} placeholder="Sime Darby" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">품명</label>
+                  <input type="text" value={form.product_name} onChange={(e) => setField('product_name', e.target.value)} placeholder="RBD Palm Olein" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Incoterms</label>
+                  <select value={form.incoterms} onChange={(e) => setField('incoterms', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    <option value="">선택</option>
+                    <option value="CIF">CIF</option>
+                    <option value="CFR">CFR</option>
+                    <option value="FOB">FOB</option>
+                    <option value="DAP">DAP</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">결제조건</label>
+                  <input type="text" value={form.payment_terms} onChange={(e) => setField('payment_terms', e.target.value)} placeholder="CAD" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">ETD</label>
+                  <input type="date" value={form.etd} onChange={(e) => setField('etd', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">계약번호</label>
+                  <input type="text" value={form.contract_number} onChange={(e) => setField('contract_number', e.target.value)} placeholder="SC-2026-001" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">비고</label>
+                  <input type="text" value={form.notes} onChange={(e) => setField('notes', e.target.value)} placeholder="메모" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setShowForm(false)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-200">취소</button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !form.shipment_month || !form.unit_price || !form.qty_mt}
+                  className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+                >
+                  {saving ? '저장 중...' : formMode === 'edit' ? '수정 저장' : '등록'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* RAW Table */}
+          {loading ? <Shimmer className="h-60" /> : purchaseData.length === 0 ? (
+            <div className="card p-8 text-center">
+              <p className="text-slate-500 text-sm">등록된 구매 데이터가 없습니다</p>
+              <p className="text-slate-400 text-xs mt-1">&quot;Seed&quot; 버튼으로 초기 데이터를 투입하거나 &quot;+ 구매 추가&quot;로 등록하세요</p>
+            </div>
+          ) : (
+            <div className="card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">No</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">상품</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">선적월</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">공급사</th>
+                      <th className="px-3 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">단가</th>
+                      <th className="px-3 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">수량(MT)</th>
+                      <th className="px-3 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">금액(USD)</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Incoterms</th>
+                      <th className="px-3 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider w-20">관리</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {purchaseData.map((p) => {
+                      const isExpanded = expandedId === p.id;
+                      return (
+                        <React.Fragment key={p.id}>
+                          <tr className="hover:bg-slate-50/60 transition-colors group">
+                            <td className="px-3 py-2.5 text-xs text-slate-400">{p.order_no || p.id}</td>
+                            <td className="px-3 py-2.5 font-medium text-slate-800">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.product === 'RBD' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{p.product}</span>
+                            </td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-600">{p.shipment_month}</td>
+                            <td className="px-3 py-2.5 text-slate-600 text-xs">{p.supplier || '-'}</td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right font-medium">${formatNumber(p.unit_price, 2)}</td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(p.qty_mt, 1)}</td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-700 text-right">${formatNumber(p.amount_usd, 0)}</td>
+                            <td className="px-3 py-2.5 text-xs text-slate-500">{p.incoterms || '-'}</td>
+                            <td className="px-3 py-2.5 text-center">
+                              <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => setExpandedId(isExpanded ? null : p.id)} className="p-1 text-slate-400 hover:text-blue-600" title="상세보기">
+                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isExpanded ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} /></svg>
+                                </button>
+                                <button onClick={() => openEditForm(p)} className="p-1 text-slate-400 hover:text-amber-600" title="수정">
+                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                </button>
+                                {deleteConfirm === p.id ? (
+                                  <button onClick={() => handleDelete(p.id)} className="p-1 text-rose-600 font-medium text-xs">확인</button>
+                                ) : (
+                                  <button onClick={() => setDeleteConfirm(p.id)} className="p-1 text-slate-400 hover:text-rose-600" title="삭제">
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-slate-50/50">
+                              <td colSpan={9} className="px-4 py-3">
+                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 text-xs">
+                                  <div><span className="text-slate-400 block">제조사</span><span className="text-slate-700 font-medium">{p.manufacturer || '-'}</span></div>
+                                  <div><span className="text-slate-400 block">품명</span><span className="text-slate-700 font-medium">{p.product_name || '-'}</span></div>
+                                  <div><span className="text-slate-400 block">결제조건</span><span className="text-slate-700 font-medium">{p.payment_terms || '-'}</span></div>
+                                  <div><span className="text-slate-400 block">ETD</span><span className="text-slate-700 font-medium">{p.etd || '-'}</span></div>
+                                  <div><span className="text-slate-400 block">계약번호</span><span className="text-slate-700 font-medium">{p.contract_number || '-'}</span></div>
+                                  <div><span className="text-slate-400 block">비고</span><span className="text-slate-700 font-medium">{p.notes || '-'}</span></div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
-      {/* Table */}
-      {loading ? <Shimmer className="h-60" /> : purchaseData.length === 0 ? (
-        <div className="card p-8 text-center">
-          <p className="text-slate-500 text-sm">등록된 구매 이력이 없습니다</p>
-          <p className="text-slate-400 text-xs mt-1">상단의 &quot;+ 구매 이력 추가&quot; 버튼이나 SC PDF 업로드로 추가하세요</p>
-        </div>
-      ) : (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">상품</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">선적월</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">계약일</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">계약가</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">수량(MT)</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">공급사</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">시장가</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">가격차</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">절감효과</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">평가</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider w-24">관리</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {purchaseData.map((p) => {
-                  const lower = p.price_diff < 0;
-                  const isExpanded = expandedId === p.id;
-                  return (
-                    <React.Fragment key={p.id}>
-                      <tr className="hover:bg-slate-50/60 transition-colors group">
-                        <td className="px-4 py-3 font-medium text-slate-800">{p.product}</td>
-                        <td className="px-4 py-3 tabular-nums text-slate-600">{p.shipment_month}</td>
-                        <td className="px-4 py-3 text-slate-500 text-xs">{p.contract_date}</td>
-                        <td className="px-4 py-3 tabular-nums text-slate-800 text-right font-medium">{formatPrice(p.contract_price)}</td>
-                        <td className="px-4 py-3 tabular-nums text-slate-600 text-right">{p.quantity_mt ? formatNumber(p.quantity_mt, 1) : '-'}</td>
-                        <td className="px-4 py-3 text-slate-600 text-xs">{p.supplier || '-'}</td>
-                        <td className="px-4 py-3 tabular-nums text-slate-500 text-right">{formatPrice(p.market_price)}</td>
-                        <td className={`px-4 py-3 tabular-nums font-semibold text-right ${lower ? 'text-emerald-600' : 'text-rose-500'}`}>
-                          {p.price_diff != null ? `${lower ? '▼' : '▲'} ${formatPrice(Math.abs(p.price_diff))}` : '-'}
-                        </td>
-                        <td className={`px-4 py-3 tabular-nums font-semibold text-right ${(p.prebuy_effect_krw || 0) < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                          {p.prebuy_effect_krw != null ? formatKRW(p.prebuy_effect_krw) : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {p.evaluation ? (
-                            <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                              p.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                            }`}>{p.evaluation}</span>
-                          ) : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => setExpandedId(isExpanded ? null : p.id)} className="p-1 text-slate-400 hover:text-blue-600" title="상세보기">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isExpanded ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} /></svg>
-                            </button>
-                            <button onClick={() => openEditForm(p)} className="p-1 text-slate-400 hover:text-amber-600" title="수정">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                            </button>
-                            {deleteConfirm === p.id ? (
-                              <button onClick={() => handleDelete(p.id)} className="p-1 text-rose-600 font-medium text-xs">확인</button>
+      {/* ===== PREBUY VIEW ===== */}
+      {subTab === 'prebuy' && (
+        <>
+          {/* Summary */}
+          {prebuySummary && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+              <MetricCard
+                label="총 선구매 효과 (KRW)"
+                value={formatKRW(prebuySummary.total_effect_krw)}
+                accent={prebuySummary.total_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}
+              />
+              <MetricCard
+                label="평가"
+                value={prebuySummary.total_effect_krw < 0 ? '절감 성공' : '절감 실패'}
+                accent={prebuySummary.total_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}
+              />
+            </div>
+          )}
+
+          {/* Prebuy Table */}
+          {prebuyData.length === 0 ? (
+            <div className="card p-8 text-center">
+              <p className="text-slate-500 text-sm">선구매 효과 데이터가 없습니다</p>
+              <p className="text-slate-400 text-xs mt-1">구매현황 RAW에서 데이터를 먼저 등록하세요</p>
+            </div>
+          ) : (
+            <div className="card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-3 py-3 text-left font-semibold text-slate-500 uppercase tracking-wider">선적월</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RBD(MT)</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RSPO(MT)</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">합계(MT)</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">가중평균가</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">시황가</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">가격차</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">효과(KRW)</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">누적효과</th>
+                      <th className="px-3 py-3 text-center font-semibold text-slate-500 uppercase tracking-wider">평가</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {prebuyData.map((row) => {
+                      const isEditing = editingMarket === row.shipment_month;
+                      return (
+                        <tr key={row.shipment_month} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="px-3 py-2.5 font-medium text-slate-700">{row.shipment_month}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rbd_qty, 0)}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rspo_qty, 0)}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right font-medium">{formatNumber(row.total_qty, 0)}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-right">
+                            {isEditing ? (
+                              <div className="flex items-center gap-1 justify-end">
+                                <input
+                                  type="number" step="0.1" value={marketInput}
+                                  onChange={(e) => setMarketInput(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') handleMarketPriceSave(row.shipment_month); if (e.key === 'Escape') setEditingMarket(null); }}
+                                  className="w-20 px-1.5 py-1 border border-blue-300 rounded text-xs text-right bg-white"
+                                  autoFocus
+                                />
+                                <button onClick={() => handleMarketPriceSave(row.shipment_month)} disabled={savingMarket} className="text-blue-600 hover:text-blue-800 text-[10px] font-medium">
+                                  {savingMarket ? '...' : '저장'}
+                                </button>
+                              </div>
                             ) : (
-                              <button onClick={() => setDeleteConfirm(p.id)} className="p-1 text-slate-400 hover:text-rose-600" title="삭제">
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                              </button>
+                              <span
+                                className="cursor-pointer text-blue-600 hover:text-blue-800 hover:underline"
+                                onClick={() => { setEditingMarket(row.shipment_month); setMarketInput(row.market_price?.toString() || ''); }}
+                                title="클릭하여 시황가 수정"
+                              >
+                                ${formatNumber(row.market_price, 2)}
+                              </span>
                             )}
-                          </div>
-                        </td>
-                      </tr>
-                      {/* Expanded Detail Row */}
-                      {isExpanded && (
-                        <tr className="bg-slate-50/50">
-                          <td colSpan={11} className="px-4 py-3">
-                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-xs">
-                              <div>
-                                <span className="text-slate-400 block">계약번호</span>
-                                <span className="text-slate-700 font-medium">{p.contract_number || '-'}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 block">Incoterms</span>
-                                <span className="text-slate-700 font-medium">{p.incoterms || '-'}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 block">결제조건</span>
-                                <span className="text-slate-700 font-medium">{p.payment_terms || '-'}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 block">선적항</span>
-                                <span className="text-slate-700 font-medium">{p.loading_port || '-'}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 block">도착항</span>
-                                <span className="text-slate-700 font-medium">{p.discharge_port || '-'}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 block">비고</span>
-                                <span className="text-slate-700 font-medium">{p.notes || '-'}</span>
-                              </div>
-                            </div>
+                          </td>
+                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.price_diff < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                            {row.price_diff < 0 ? '▼' : '▲'} ${formatNumber(Math.abs(row.price_diff), 2)}
+                          </td>
+                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                            {formatKRW(row.effect_krw)}
+                          </td>
+                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.cumulative_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                            {formatKRW(row.cumulative_effect_krw)}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                              row.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                            }`}>{row.evaluation}</span>
                           </td>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <p className="text-xs text-slate-400">* 시황가를 클릭하면 수동으로 수정할 수 있습니다. 효과 = (계약총액 - 시황가×물량) × 환율(1,450)</p>
+        </>
       )}
     </div>
   );
@@ -2657,14 +2805,14 @@ const LCTab = () => {
         body: JSON.stringify({
           purchase_id: selectedPurchaseId,
           product: purchase.product,
-          quantity_mt: purchase.quantity_mt,
-          contract_price: purchase.contract_price,
+          quantity_mt: purchase.qty_mt,
+          contract_price: purchase.unit_price,
           shipment_month: purchase.shipment_month,
           supplier: purchase.supplier,
           incoterms: purchase.incoterms,
           payment_terms: purchase.payment_terms,
-          loading_port: purchase.loading_port,
-          discharge_port: purchase.discharge_port,
+          loading_port: null,
+          discharge_port: null,
         }),
       });
       const json = await res.json();
@@ -2747,7 +2895,7 @@ const LCTab = () => {
             <option value="">-- 구매 이력을 선택하세요 --</option>
             {purchaseData.map(p => (
               <option key={p.id} value={p.id}>
-                {p.product} | {p.shipment_month} | ${p.contract_price}/MT
+                {p.product} | {p.shipment_month} | ${p.unit_price}/MT | {p.qty_mt}MT
               </option>
             ))}
           </select>

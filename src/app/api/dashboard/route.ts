@@ -66,7 +66,7 @@ export async function GET() {
 
     // Recent purchases
     const recentPurchases = await dbAll(
-      `SELECT * FROM purchases ORDER BY contract_date DESC LIMIT 5`
+      `SELECT * FROM purchases ORDER BY created_at DESC, id DESC LIMIT 5`
     );
 
     // Recent news
