@@ -55,98 +55,113 @@ async function handleRawView() {
   });
 }
 
-async function handlePrebuySummary() {
-  // Get all purchases
-  const purchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month ASC');
-
-  // Get all market prices
-  const marketPrices = await dbAll('SELECT * FROM prebuy_market_prices');
-  const priceMap = new Map(
-    marketPrices.map((mp: any) => [mp.shipment_month, mp])
-  );
-
-  // Group purchases by shipment_month
-  const groupedByMonth = new Map<string, any[]>();
+function calcProductRows(
+  purchases: any[],
+  priceMap: Map<string, any>,
+  productFilter: string | null // null = all
+) {
+  // Group by shipment_month
+  const grouped = new Map<string, any[]>();
   purchases.forEach((p: any) => {
-    const month = p.shipment_month;
-    if (!groupedByMonth.has(month)) {
-      groupedByMonth.set(month, []);
-    }
-    groupedByMonth.get(month)!.push(p);
+    if (productFilter && p.product !== productFilter) return;
+    if (!grouped.has(p.shipment_month)) grouped.set(p.shipment_month, []);
+    grouped.get(p.shipment_month)!.push(p);
   });
 
-  // Calculate prebuy evaluation per month
-  const prebuySummary: any[] = [];
-  let cumulativeEffect = 0;
+  const rows: any[] = [];
+  let cumEffect = 0;
   let totalEffect = 0;
 
-  for (const [shipmentMonth, monthPurchases] of groupedByMonth.entries()) {
-    const marketData = priceMap.get(shipmentMonth);
-    const marketPrice = marketData?.market_price || 0;
-    const exchangeRate = marketData?.exchange_rate || 1450;
+  for (const [month, monthPurchases] of grouped.entries()) {
+    const mp = priceMap.get(month);
+    const marketPrice = mp?.market_price || 0;
+    const exchangeRate = mp?.exchange_rate || 1450;
 
-    // Separate RBD and RSPO
-    const rbdPurchases = monthPurchases.filter((p: any) => p.product === 'RBD');
-    const rspoPurchases = monthPurchases.filter((p: any) => p.product === 'RSPO');
+    const qty = monthPurchases.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
+    const amount = monthPurchases.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
+    const wavg = qty > 0 ? amount / qty : 0;
+    const diffUsd = amount - marketPrice * qty;
+    const effectKrw = diffUsd * exchangeRate;
 
-    // Calculate totals for RBD
-    const rbdQty = rbdPurchases.reduce((sum: number, p: any) => sum + (p.qty_mt || 0), 0);
-    const rbdAmount = rbdPurchases.reduce(
-      (sum: number, p: any) => sum + (p.amount_usd || 0),
-      0
-    );
+    cumEffect += effectKrw;
+    totalEffect += effectKrw;
 
-    // Calculate totals for RSPO
-    const rspoQty = rspoPurchases.reduce((sum: number, p: any) => sum + (p.qty_mt || 0), 0);
-    const rspoAmount = rspoPurchases.reduce(
-      (sum: number, p: any) => sum + (p.amount_usd || 0),
-      0
-    );
+    rows.push({
+      shipment_month: month,
+      qty, amount, wavg_price: wavg,
+      market_price: marketPrice,
+      price_diff: wavg - marketPrice,
+      effect_usd: diffUsd,
+      effect_krw: effectKrw,
+      exchange_rate: exchangeRate,
+      cumulative_effect_krw: cumEffect,
+      evaluation: effectKrw < 0 ? '성공' : '실패',
+    });
+  }
 
-    // Aggregate totals
+  return { rows, total_effect_krw: totalEffect };
+}
+
+async function handlePrebuySummary() {
+  const purchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month ASC');
+  const marketPrices = await dbAll('SELECT * FROM prebuy_market_prices');
+  const priceMap = new Map(marketPrices.map((mp: any) => [mp.shipment_month, mp]));
+
+  // Per-product breakdowns
+  const rbd = calcProductRows(purchases, priceMap, 'RBD');
+  const rspo = calcProductRows(purchases, priceMap, 'RSPO');
+
+  // Combined (all products)
+  const grouped = new Map<string, any[]>();
+  purchases.forEach((p: any) => {
+    if (!grouped.has(p.shipment_month)) grouped.set(p.shipment_month, []);
+    grouped.get(p.shipment_month)!.push(p);
+  });
+
+  const combined: any[] = [];
+  let cumAll = 0;
+  let totalAll = 0;
+  for (const [month, monthPurchases] of grouped.entries()) {
+    const mp = priceMap.get(month);
+    const marketPrice = mp?.market_price || 0;
+    const exchangeRate = mp?.exchange_rate || 1450;
+
+    const rbdP = monthPurchases.filter((p: any) => p.product === 'RBD');
+    const rspoP = monthPurchases.filter((p: any) => p.product === 'RSPO');
+
+    const rbdQty = rbdP.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
+    const rbdAmount = rbdP.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
+    const rspoQty = rspoP.reduce((s: number, p: any) => s + (p.qty_mt || 0), 0);
+    const rspoAmount = rspoP.reduce((s: number, p: any) => s + (p.amount_usd || 0), 0);
+
     const totalQty = rbdQty + rspoQty;
     const totalAmount = rbdAmount + rspoAmount;
+    const wavg = totalQty > 0 ? totalAmount / totalQty : 0;
+    const diffUsd = totalAmount - marketPrice * totalQty;
+    const effectKrw = diffUsd * exchangeRate;
 
-    // Weighted average contract price
-    const wavgPrice = totalQty > 0 ? totalAmount / totalQty : 0;
+    cumAll += effectKrw;
+    totalAll += effectKrw;
 
-    // Effect calculation: (total_contract_amount - market_price * total_qty) * exchange_rate
-    const contractVsMarketUsd = totalAmount - marketPrice * totalQty;
-    const effect = contractVsMarketUsd * (exchangeRate / 1); // In KRW
-
-    cumulativeEffect += effect;
-    totalEffect += effect;
-
-    // Price difference
-    const priceDiff = wavgPrice - marketPrice;
-
-    // Evaluation
-    const evaluation = effect < 0 ? '성공' : '실패';
-
-    prebuySummary.push({
-      shipment_month: shipmentMonth,
-      rbd_qty: rbdQty,
-      rbd_amount: rbdAmount,
-      rspo_qty: rspoQty,
-      rspo_amount: rspoAmount,
-      total_qty: totalQty,
-      total_amount: totalAmount,
-      market_price: marketPrice,
-      wavg_price: wavgPrice,
-      price_diff: priceDiff,
-      effect_usd: contractVsMarketUsd,
-      effect_krw: effect,
+    combined.push({
+      shipment_month: month,
+      rbd_qty: rbdQty, rbd_amount: rbdAmount,
+      rspo_qty: rspoQty, rspo_amount: rspoAmount,
+      total_qty: totalQty, total_amount: totalAmount,
+      wavg_price: wavg, market_price: marketPrice,
+      price_diff: wavg - marketPrice,
+      effect_usd: diffUsd, effect_krw: effectKrw,
       exchange_rate: exchangeRate,
-      cumulative_effect_krw: cumulativeEffect,
-      evaluation,
+      cumulative_effect_krw: cumAll,
+      evaluation: effectKrw < 0 ? '성공' : '실패',
     });
   }
 
   return NextResponse.json({
-    data: prebuySummary,
-    summary: {
-      total_effect_krw: totalEffect,
-    },
+    data: combined,
+    rbd: { rows: rbd.rows, total_effect_krw: rbd.total_effect_krw },
+    rspo: { rows: rspo.rows, total_effect_krw: rspo.total_effect_krw },
+    summary: { total_effect_krw: totalAll },
   });
 }
 

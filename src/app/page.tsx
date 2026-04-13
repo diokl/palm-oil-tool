@@ -191,12 +191,14 @@ interface PurchasesRawResponse {
 
 interface PrebuyRow {
   shipment_month: string;
-  rbd_qty: number;
-  rbd_amount: number;
-  rspo_qty: number;
-  rspo_amount: number;
-  total_qty: number;
-  total_amount: number;
+  rbd_qty?: number;
+  rbd_amount?: number;
+  rspo_qty?: number;
+  rspo_amount?: number;
+  total_qty?: number;
+  total_amount?: number;
+  qty?: number;
+  amount?: number;
   market_price: number;
   wavg_price: number;
   price_diff: number;
@@ -207,8 +209,15 @@ interface PrebuyRow {
   evaluation: string;
 }
 
+interface PrebuyProductData {
+  rows: PrebuyRow[];
+  total_effect_krw: number;
+}
+
 interface PrebuyResponse {
   data: PrebuyRow[];
+  rbd: PrebuyProductData;
+  rspo: PrebuyProductData;
   summary: { total_effect_krw: number };
 }
 
@@ -824,7 +833,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
       {/* Prebuy Effect Summary */}
       {data.prebuy_effect && (
         <div>
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">선구매 효과</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">총 효과 분석</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <MetricCard
               label="총 선구매 효과"
@@ -1787,6 +1796,8 @@ const PurchasesTab = () => {
   const [purchaseData, setPurchaseData] = useState<PurchaseItem[]>([]);
   const [rawSummary, setRawSummary] = useState<PurchasesRawResponse['summary'] | null>(null);
   const [prebuyData, setPrebuyData] = useState<PrebuyRow[]>([]);
+  const [rbdPrebuy, setRbdPrebuy] = useState<PrebuyProductData | null>(null);
+  const [rspoPrebuy, setRspoPrebuy] = useState<PrebuyProductData | null>(null);
   const [prebuySummary, setPrebuySummary] = useState<PrebuyResponse['summary'] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -1819,6 +1830,17 @@ const PurchasesTab = () => {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
+  // Prebuy sub-tab & excluded months
+  const [prebuyView, setPrebuyView] = useState<'total' | 'rbd' | 'rspo'>('total');
+  const [excludedMonths, setExcludedMonths] = useState<Set<string>>(new Set());
+  const toggleExclude = (month: string) => {
+    setExcludedMonths(prev => {
+      const next = new Set(prev);
+      if (next.has(month)) next.delete(month); else next.add(month);
+      return next;
+    });
+  };
+
   useEffect(() => { fetchRaw(); fetchPrebuy(); }, []);
 
   const fetchRaw = async () => {
@@ -1840,6 +1862,8 @@ const PurchasesTab = () => {
       const res = await fetch('/api/purchases?view=prebuy');
       const json: PrebuyResponse = await res.json();
       setPrebuyData(json.data || []);
+      setRbdPrebuy(json.rbd || null);
+      setRspoPrebuy(json.rspo || null);
       setPrebuySummary(json.summary || null);
     } catch (error) {
       console.error('Failed to fetch prebuy:', error);
@@ -2276,28 +2300,74 @@ const PurchasesTab = () => {
       )}
 
       {/* ===== PREBUY VIEW ===== */}
-      {subTab === 'prebuy' && (
+      {subTab === 'prebuy' && (() => {
+        // Determine which rows to show based on prebuyView
+        const sourceRows: PrebuyRow[] =
+          prebuyView === 'rbd' ? (rbdPrebuy?.rows || []) :
+          prebuyView === 'rspo' ? (rspoPrebuy?.rows || []) :
+          prebuyData;
+        const isProductView = prebuyView === 'rbd' || prebuyView === 'rspo';
+
+        // Recalculate with exclusions
+        const activeRows = sourceRows.filter(r => !excludedMonths.has(r.shipment_month));
+        let recalcCum = 0;
+        const displayRows = sourceRows.map(r => {
+          const excluded = excludedMonths.has(r.shipment_month);
+          if (!excluded) recalcCum += r.effect_krw;
+          return { ...r, _excluded: excluded, _cumulative: excluded ? null : recalcCum };
+        });
+        const filteredEffect = activeRows.reduce((s, r) => s + r.effect_krw, 0);
+
+        // Section totals for summary cards
+        const rbdEffect = rbdPrebuy?.total_effect_krw ?? 0;
+        const rspoEffect = rspoPrebuy?.total_effect_krw ?? 0;
+        const totalEffect = prebuySummary?.total_effect_krw ?? 0;
+
+        return (
         <>
-          {/* Summary */}
-          {prebuySummary && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-              <MetricCard
-                label="총 선구매 효과 (KRW)"
-                value={formatKRW(prebuySummary.total_effect_krw)}
-                accent={prebuySummary.total_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}
-              />
-              <MetricCard
-                label="평가"
-                value={prebuySummary.total_effect_krw < 0 ? '절감 성공' : '절감 실패'}
-                accent={prebuySummary.total_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}
-              />
-            </div>
-          )}
+          {/* Summary Cards: RBD / RSPO / Total */}
+          <div className="grid grid-cols-3 gap-3 md:gap-4">
+            <MetricCard
+              label="RBD 선구매 효과"
+              value={formatKRW(rbdEffect)}
+              accent={rbdEffect < 0 ? 'text-emerald-600' : 'text-rose-500'}
+            />
+            <MetricCard
+              label="RSPO(MB) 선구매 효과"
+              value={formatKRW(rspoEffect)}
+              accent={rspoEffect < 0 ? 'text-emerald-600' : 'text-rose-500'}
+            />
+            <MetricCard
+              label="총 효과 분석"
+              value={formatKRW(excludedMonths.size > 0 ? filteredEffect : totalEffect)}
+              accent={(excludedMonths.size > 0 ? filteredEffect : totalEffect) < 0 ? 'text-emerald-600' : 'text-rose-500'}
+              unit={excludedMonths.size > 0 ? `${excludedMonths.size}개월 제외` : undefined}
+            />
+          </div>
+
+          {/* Prebuy sub-tabs: Total / RBD / RSPO */}
+          <div className="flex items-center gap-2">
+            {(['total', 'rbd', 'rspo'] as const).map(v => (
+              <button key={v} onClick={() => setPrebuyView(v)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  prebuyView === v ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}>
+                {v === 'total' ? '총 효과 분석' : v === 'rbd' ? 'RBD Palm Oil' : 'RSPO(MB)'}
+              </button>
+            ))}
+            {excludedMonths.size > 0 && (
+              <button onClick={() => setExcludedMonths(new Set())} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors">
+                제외 초기화 ({excludedMonths.size})
+              </button>
+            )}
+          </div>
 
           {/* Prebuy Table */}
-          {prebuyData.length === 0 ? (
+          {sourceRows.length === 0 ? (
             <div className="card p-8 text-center">
-              <p className="text-slate-500 text-sm">선구매 효과 데이터가 없습니다</p>
+              <p className="text-slate-500 text-sm">
+                {prebuyView === 'rbd' ? 'RBD' : prebuyView === 'rspo' ? 'RSPO(MB)' : ''} 선구매 효과 데이터가 없습니다
+              </p>
               <p className="text-slate-400 text-xs mt-1">구매현황 RAW에서 데이터를 먼저 등록하세요</p>
             </div>
           ) : (
@@ -2306,10 +2376,11 @@ const PurchasesTab = () => {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-2 py-3 text-center font-semibold text-slate-400 w-8" title="제외 토글"></th>
                       <th className="px-3 py-3 text-left font-semibold text-slate-500 uppercase tracking-wider">선적월</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RBD(MT)</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RSPO(MT)</th>
-                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">합계(MT)</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">수량(MT)</th>
+                      {!isProductView && <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RBD(MT)</th>}
+                      {!isProductView && <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">RSPO(MT)</th>}
                       <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">가중평균가</th>
                       <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">시황가</th>
                       <th className="px-3 py-3 text-right font-semibold text-slate-500 uppercase tracking-wider">가격차</th>
@@ -2319,35 +2390,37 @@ const PurchasesTab = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {prebuyData.map((row) => {
+                    {displayRows.map((row) => {
+                      const excluded = (row as any)._excluded;
+                      const cumVal = (row as any)._cumulative;
                       const isEditing = editingMarket === row.shipment_month;
+                      const qty = isProductView ? (row.qty ?? 0) : (row.total_qty ?? 0);
                       return (
-                        <tr key={row.shipment_month} className="hover:bg-slate-50/60 transition-colors">
+                        <tr key={row.shipment_month} className={`transition-colors ${excluded ? 'opacity-40 bg-slate-50 line-through' : 'hover:bg-slate-50/60'}`}>
+                          <td className="px-2 py-2.5 text-center">
+                            <input type="checkbox" checked={!excluded} onChange={() => toggleExclude(row.shipment_month)}
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" title={excluded ? '포함하기' : '제외하기'} />
+                          </td>
                           <td className="px-3 py-2.5 font-medium text-slate-700">{row.shipment_month}</td>
-                          <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rbd_qty, 0)}</td>
-                          <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rspo_qty, 0)}</td>
-                          <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right font-medium">{formatNumber(row.total_qty, 0)}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right font-medium">{formatNumber(qty, 0)}</td>
+                          {!isProductView && <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rbd_qty ?? 0, 0)}</td>}
+                          {!isProductView && <td className="px-3 py-2.5 tabular-nums text-slate-600 text-right">{formatNumber(row.rspo_qty ?? 0, 0)}</td>}
                           <td className="px-3 py-2.5 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
                           <td className="px-3 py-2.5 tabular-nums text-right">
                             {isEditing ? (
                               <div className="flex items-center gap-1 justify-end">
-                                <input
-                                  type="number" step="0.1" value={marketInput}
+                                <input type="number" step="0.1" value={marketInput}
                                   onChange={(e) => setMarketInput(e.target.value)}
                                   onKeyDown={(e) => { if (e.key === 'Enter') handleMarketPriceSave(row.shipment_month); if (e.key === 'Escape') setEditingMarket(null); }}
-                                  className="w-20 px-1.5 py-1 border border-blue-300 rounded text-xs text-right bg-white"
-                                  autoFocus
-                                />
+                                  className="w-20 px-1.5 py-1 border border-blue-300 rounded text-xs text-right bg-white" autoFocus />
                                 <button onClick={() => handleMarketPriceSave(row.shipment_month)} disabled={savingMarket} className="text-blue-600 hover:text-blue-800 text-[10px] font-medium">
                                   {savingMarket ? '...' : '저장'}
                                 </button>
                               </div>
                             ) : (
-                              <span
-                                className="cursor-pointer text-blue-600 hover:text-blue-800 hover:underline"
+                              <span className="cursor-pointer text-blue-600 hover:text-blue-800 hover:underline"
                                 onClick={() => { setEditingMarket(row.shipment_month); setMarketInput(row.market_price?.toString() || ''); }}
-                                title="클릭하여 시황가 수정"
-                              >
+                                title="클릭하여 시황가 수정">
                                 ${formatNumber(row.market_price, 2)}
                               </span>
                             )}
@@ -2358,13 +2431,15 @@ const PurchasesTab = () => {
                           <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
                             {formatKRW(row.effect_krw)}
                           </td>
-                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${row.cumulative_effect_krw < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            {formatKRW(row.cumulative_effect_krw)}
+                          <td className={`px-3 py-2.5 tabular-nums font-semibold text-right ${excluded ? 'text-slate-400' : (cumVal ?? 0) < 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                            {excluded ? '-' : formatKRW(cumVal)}
                           </td>
                           <td className="px-3 py-2.5 text-center">
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                              row.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                            }`}>{row.evaluation}</span>
+                            {!excluded && (
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                row.evaluation === '성공' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                              }`}>{row.evaluation}</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -2374,9 +2449,10 @@ const PurchasesTab = () => {
               </div>
             </div>
           )}
-          <p className="text-xs text-slate-400">* 시황가를 클릭하면 수동으로 수정할 수 있습니다. 효과 = (계약총액 - 시황가×물량) × 환율(1,450)</p>
+          <p className="text-xs text-slate-400">* 시황가를 클릭하면 수동 수정 가능. 체크 해제 시 해당 월이 누적효과/총 효과에서 제외됩니다. 효과 = (계약총액 - 시황가×물량) × 환율(1,450)</p>
         </>
-      )}
+        );
+      })()}
     </div>
   );
 };
