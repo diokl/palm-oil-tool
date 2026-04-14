@@ -60,6 +60,7 @@ interface PurchaseDetail {
   qty_mt: number;
   amount_usd: number;
   market_price_usd: number | null;
+  exchange_rate: number;
   effect_usd: number;
   effect_krw: number;
 }
@@ -99,18 +100,21 @@ async function handlePrebuySummary() {
   let rbdTotal = 0, rspoTotal = 0;
 
   for (const [month, monthPurchases] of grouped.entries()) {
-    // Build per-purchase details
+    // Build per-purchase details (each purchase has its own exchange_rate)
     const details: PurchaseDetail[] = monthPurchases.map((p: any) => {
       const mp = p.market_price_usd != null ? Number(p.market_price_usd) : null;
+      const er = p.exchange_rate != null ? Number(p.exchange_rate) : 1450;
       const effectUsd = mp != null ? (mp * (p.qty_mt || 0) - (p.amount_usd || 0)) : 0;
+      const effectKrw = effectUsd * er;
       return {
         id: p.id, order_no: p.order_no, product: p.product,
         shipment_month: p.shipment_month, supplier: p.supplier,
         manufacturer: p.manufacturer, product_name: p.product_name,
         unit_price: p.unit_price, qty_mt: p.qty_mt, amount_usd: p.amount_usd,
         market_price_usd: mp,
+        exchange_rate: er,
         effect_usd: effectUsd,
-        effect_krw: 0, // will be set after exchange_rate is known — but we don't store exchange_rate per-purchase
+        effect_krw: effectKrw,
       };
     });
 
@@ -122,6 +126,7 @@ async function handlePrebuySummary() {
       qty: arr.reduce((s, d) => s + (d.qty_mt || 0), 0),
       amount: arr.reduce((s, d) => s + (d.amount_usd || 0), 0),
       effectUsd: arr.reduce((s, d) => s + d.effect_usd, 0),
+      effectKrw: arr.reduce((s, d) => s + d.effect_krw, 0),
     });
 
     const rbdS = sumGroup(rbdP);
@@ -137,21 +142,20 @@ async function handlePrebuySummary() {
       ? withMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / withMp.reduce((s, d) => s + d.qty_mt, 0)
       : 0;
 
-    // NOTE: exchange_rate is no longer stored per-month in DB.
-    // The frontend will provide it. We pass 0 here — frontend applies its own rate.
-    cumAll += totalEffectUsd;
+    const totalEffectKrw = rbdS.effectKrw + rspoS.effectKrw;
+    cumAll += totalEffectKrw;
 
     months.push({
       shipment_month: month,
       purchases: details,
       rbd_qty: rbdS.qty, rbd_amount: rbdS.amount,
-      rbd_effect_usd: rbdS.effectUsd, rbd_effect_krw: 0,
+      rbd_effect_usd: rbdS.effectUsd, rbd_effect_krw: rbdS.effectKrw,
       rspo_qty: rspoS.qty, rspo_amount: rspoS.amount,
-      rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: 0,
+      rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: rspoS.effectKrw,
       total_qty: totalQty, total_amount: totalAmount,
       wavg_price: wavg, avg_market_price: avgMp,
-      effect_usd: totalEffectUsd, effect_krw: 0,
-      cumulative_effect_krw: 0,
+      effect_usd: totalEffectUsd, effect_krw: totalEffectKrw,
+      cumulative_effect_krw: cumAll,
       evaluation: totalEffectUsd > 0 ? '성공' : '실패',
     });
 
@@ -160,14 +164,14 @@ async function handlePrebuySummary() {
       const rbdWavg = rbdS.qty > 0 ? rbdS.amount / rbdS.qty : 0;
       const rbdMp = rbdP.filter(d => d.market_price_usd != null);
       const rbdAvgMp = rbdMp.length > 0 ? rbdMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / rbdMp.reduce((s, d) => s + d.qty_mt, 0) : 0;
-      rbdCum += rbdS.effectUsd;
-      rbdTotal += rbdS.effectUsd;
+      rbdCum += rbdS.effectKrw;
+      rbdTotal += rbdS.effectKrw;
       rbdMonths.push({
         shipment_month: month, qty: rbdS.qty, amount: rbdS.amount,
         wavg_price: rbdWavg, market_price: rbdAvgMp,
         price_diff: rbdWavg - rbdAvgMp,
-        effect_usd: rbdS.effectUsd, effect_krw: 0,
-        exchange_rate: 0, cumulative_effect_krw: rbdCum,
+        effect_usd: rbdS.effectUsd, effect_krw: rbdS.effectKrw,
+        cumulative_effect_krw: rbdCum,
         evaluation: rbdS.effectUsd > 0 ? '성공' : '실패',
         purchases: rbdP,
       });
@@ -176,14 +180,14 @@ async function handlePrebuySummary() {
       const rspoWavg = rspoS.qty > 0 ? rspoS.amount / rspoS.qty : 0;
       const rspoMp = rspoP.filter(d => d.market_price_usd != null);
       const rspoAvgMp = rspoMp.length > 0 ? rspoMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / rspoMp.reduce((s, d) => s + d.qty_mt, 0) : 0;
-      rspoCum += rspoS.effectUsd;
-      rspoTotal += rspoS.effectUsd;
+      rspoCum += rspoS.effectKrw;
+      rspoTotal += rspoS.effectKrw;
       rspoMonths.push({
         shipment_month: month, qty: rspoS.qty, amount: rspoS.amount,
         wavg_price: rspoWavg, market_price: rspoAvgMp,
         price_diff: rspoWavg - rspoAvgMp,
-        effect_usd: rspoS.effectUsd, effect_krw: 0,
-        exchange_rate: 0, cumulative_effect_krw: rspoCum,
+        effect_usd: rspoS.effectUsd, effect_krw: rspoS.effectKrw,
+        cumulative_effect_krw: rspoCum,
         evaluation: rspoS.effectUsd > 0 ? '성공' : '실패',
         purchases: rspoP,
       });
@@ -192,9 +196,9 @@ async function handlePrebuySummary() {
 
   return NextResponse.json({
     data: months,
-    rbd: { rows: rbdMonths, total_effect_usd: rbdTotal },
-    rspo: { rows: rspoMonths, total_effect_usd: rspoTotal },
-    summary: { total_effect_usd: cumAll },
+    rbd: { rows: rbdMonths, total_effect_krw: rbdTotal },
+    rspo: { rows: rspoMonths, total_effect_krw: rspoTotal },
+    summary: { total_effect_krw: cumAll },
   });
 }
 
@@ -248,6 +252,16 @@ export async function PUT(request: NextRequest) {
         return NextResponse.json({ error: 'Required: id, market_price_usd' }, { status: 400 });
       }
       await dbRun('UPDATE purchases SET market_price_usd = ? WHERE id = ?', [market_price_usd, id]);
+      return NextResponse.json({ success: true });
+    }
+
+    // Handle per-purchase exchange rate update
+    if (body.action === 'update_purchase_exchange_rate') {
+      const { id, exchange_rate } = body;
+      if (!id || exchange_rate === undefined) {
+        return NextResponse.json({ error: 'Required: id, exchange_rate' }, { status: 400 });
+      }
+      await dbRun('UPDATE purchases SET exchange_rate = ? WHERE id = ?', [exchange_rate, id]);
       return NextResponse.json({ success: true });
     }
 

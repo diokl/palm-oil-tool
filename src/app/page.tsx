@@ -82,9 +82,9 @@ interface DashboardData {
   prebuy_effect: {
     months: Array<{
       shipment_month: string;
-      rbd_qty: number; rbd_amount: number; rbd_effect_usd: number;
-      rspo_qty: number; rspo_amount: number; rspo_effect_usd: number;
-      total_qty: number; total_amount: number; effect_usd: number;
+      rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
+      rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+      total_qty: number; total_amount: number; effect_usd: number; effect_krw: number;
     }>;
     total_records: number;
   } | null;
@@ -205,7 +205,9 @@ interface PrebuyPurchaseDetail {
   qty_mt: number;
   amount_usd: number;
   market_price_usd: number | null;
+  exchange_rate: number;
   effect_usd: number;
+  effect_krw: number;
 }
 
 interface PrebuyRow {
@@ -214,34 +216,35 @@ interface PrebuyRow {
   rbd_qty?: number;
   rbd_amount?: number;
   rbd_effect_usd?: number;
+  rbd_effect_krw?: number;
   rspo_qty?: number;
   rspo_amount?: number;
   rspo_effect_usd?: number;
+  rspo_effect_krw?: number;
   total_qty?: number;
   total_amount?: number;
   qty?: number;
   amount?: number;
   wavg_price: number;
   avg_market_price: number;
-  market_price?: number; // backward compat alias
+  market_price?: number;
   price_diff?: number;
   effect_usd: number;
-  effect_krw?: number;
-  exchange_rate?: number;
+  effect_krw: number;
   cumulative_effect_krw?: number;
   evaluation: string;
 }
 
 interface PrebuyProductData {
   rows: PrebuyRow[];
-  total_effect_usd: number;
+  total_effect_krw: number;
 }
 
 interface PrebuyResponse {
   data: PrebuyRow[];
   rbd: PrebuyProductData;
   rspo: PrebuyProductData;
-  summary: { total_effect_usd: number };
+  summary: { total_effect_krw: number };
 }
 
 interface NewsItem {
@@ -564,9 +567,9 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
 
 interface DashboardPrebuyMonth {
   shipment_month: string;
-  rbd_qty: number; rbd_amount: number; rbd_effect_usd: number;
-  rspo_qty: number; rspo_amount: number; rspo_effect_usd: number;
-  total_qty: number; total_amount: number; effect_usd: number;
+  rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
+  rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+  total_qty: number; total_amount: number; effect_usd: number; effect_krw: number;
 }
 
 const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, totalRecords }: {
@@ -574,21 +577,23 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
 }) => {
   const [periodFrom, setPeriodFrom] = useState(defaultFrom);
   const [periodTo, setPeriodTo] = useState(defaultTo);
-  const [exchangeRate, setExchangeRate] = useState(1450);
 
   const filtered = months.filter(m => m.shipment_month >= periodFrom && m.shipment_month <= periodTo);
 
   const rbdQty = filtered.reduce((s, m) => s + m.rbd_qty, 0);
   const rbdAmount = filtered.reduce((s, m) => s + m.rbd_amount, 0);
   const rbdEffectUsd = filtered.reduce((s, m) => s + m.rbd_effect_usd, 0);
+  const rbdEffectKrw = filtered.reduce((s, m) => s + m.rbd_effect_krw, 0);
 
   const rspoQty = filtered.reduce((s, m) => s + m.rspo_qty, 0);
   const rspoAmount = filtered.reduce((s, m) => s + m.rspo_amount, 0);
   const rspoEffectUsd = filtered.reduce((s, m) => s + m.rspo_effect_usd, 0);
+  const rspoEffectKrw = filtered.reduce((s, m) => s + m.rspo_effect_krw, 0);
 
   const totalQty = rbdQty + rspoQty;
   const totalAmount = rbdAmount + rspoAmount;
   const totalEffectUsd = rbdEffectUsd + rspoEffectUsd;
+  const totalEffectKrw = rbdEffectKrw + rspoEffectKrw;
 
   const fmtNum = (n: number) => n === 0 ? '-' : n.toLocaleString('ko-KR', { maximumFractionDigits: 0 });
   const fmtUsd = (n: number) => n === 0 ? '-' : `$${n.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}`;
@@ -599,7 +604,6 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
     return `${n < 0 ? '-' : ''}₩${(abs / 1000000).toFixed(1)}M`;
   };
 
-  // positive effect_usd = 절감 (bought cheaper than market)
   const evalLabel = (usd: number) => usd > 0 ? '절감' : usd < 0 ? '초과' : '-';
   const evalColor = (usd: number) => usd > 0 ? 'text-emerald-600 font-semibold' : usd < 0 ? 'text-rose-500 font-semibold' : 'text-slate-400';
 
@@ -608,10 +612,6 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-slate-700">선구매 실적 ({periodFrom} ~ {periodTo})</h3>
         <div className="flex items-center gap-2 text-xs">
-          <label className="text-slate-500">환율:</label>
-          <input type="number" value={exchangeRate} onChange={e => setExchangeRate(Number(e.target.value) || 0)}
-            className="w-20 px-2 py-1 border border-slate-200 rounded text-xs text-right" />
-          <span className="text-slate-400 mx-1">|</span>
           <select value={periodFrom} onChange={e => setPeriodFrom(e.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs">
             {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -639,7 +639,7 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
               <td className="px-3 py-2 text-right tabular-nums">{fmtNum(rbdQty)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(rbdAmount)}</td>
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rbdEffectUsd)}`}>{fmtUsd(rbdEffectUsd)}</td>
-              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rbdEffectUsd)}`}>{fmtKrw2(rbdEffectUsd * exchangeRate)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rbdEffectUsd)}`}>{fmtKrw2(rbdEffectKrw)}</td>
               <td className={`px-3 py-2 text-center ${evalColor(rbdEffectUsd)}`}>{evalLabel(rbdEffectUsd)}</td>
             </tr>
             <tr className="border-b border-slate-50 hover:bg-slate-50/50">
@@ -647,7 +647,7 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
               <td className="px-3 py-2 text-right tabular-nums">{fmtNum(rspoQty)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(rspoAmount)}</td>
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectUsd)}`}>{fmtUsd(rspoEffectUsd)}</td>
-              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectUsd)}`}>{fmtKrw2(rspoEffectUsd * exchangeRate)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectUsd)}`}>{fmtKrw2(rspoEffectKrw)}</td>
               <td className={`px-3 py-2 text-center ${evalColor(rspoEffectUsd)}`}>{evalLabel(rspoEffectUsd)}</td>
             </tr>
             <tr className="bg-slate-50/80 font-semibold">
@@ -655,13 +655,13 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
               <td className="px-3 py-2 text-right tabular-nums">{fmtNum(totalQty)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(totalAmount)}</td>
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(totalEffectUsd)}`}>{fmtUsd(totalEffectUsd)}</td>
-              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(totalEffectUsd)}`}>{fmtKrw2(totalEffectUsd * exchangeRate)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(totalEffectUsd)}`}>{fmtKrw2(totalEffectKrw)}</td>
               <td className={`px-3 py-2 text-center ${evalColor(totalEffectUsd)}`}>{evalLabel(totalEffectUsd)}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p className="text-[10px] text-slate-400 mt-1 text-right">총 {totalRecords}건 기준 · 환율 {exchangeRate.toLocaleString()}원 적용 · 효과 = (시황가 × 물량 - 계약금액) × 환율</p>
+      <p className="text-[10px] text-slate-400 mt-1 text-right">총 {totalRecords}건 기준 · 건별 환율 적용 · 효과 = (시황가 × 물량 - 계약금액) × 환율</p>
     </div>
   );
 };
@@ -1934,13 +1934,12 @@ const PurchasesTab = () => {
   // Delete confirm
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
-  // Market price editing (per-purchase)
+  // Market price / exchange rate editing (per-purchase)
   const [editingMarketId, setEditingMarketId] = useState<number | null>(null);
+  const [editingExRateId, setEditingExRateId] = useState<number | null>(null);
   const [marketInput, setMarketInput] = useState('');
+  const [exRateInput, setExRateInput] = useState('');
   const [savingMarket, setSavingMarket] = useState(false);
-
-  // Exchange rate (user-configurable, default 1450)
-  const [exchangeRate, setExchangeRate] = useState(1450);
 
   // Expanded month in prebuy detail (show individual purchases)
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
@@ -2158,6 +2157,25 @@ const PurchasesTab = () => {
       fetchPrebuy();
     } catch (error) {
       console.error('Failed to update market price:', error);
+    } finally {
+      setSavingMarket(false);
+    }
+  };
+
+  // Save exchange rate for a single purchase
+  const handlePurchaseExRateSave = async (purchaseId: number) => {
+    if (!exRateInput) return;
+    setSavingMarket(true);
+    try {
+      await fetch('/api/purchases', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_purchase_exchange_rate', id: purchaseId, exchange_rate: parseFloat(exRateInput) }),
+      });
+      setEditingExRateId(null);
+      fetchPrebuy();
+    } catch (error) {
+      console.error('Failed to update exchange rate:', error);
     } finally {
       setSavingMarket(false);
     }
@@ -2457,12 +2475,12 @@ const PurchasesTab = () => {
           prebuyData;
         const periodRows = sourceRows.filter(r => inPeriod(r.shipment_month));
 
-        // Recalculate cumulative with exclusions (USD-based, then × exchangeRate for KRW)
-        let recalcCum = 0;
+        // Recalculate cumulative with exclusions (KRW-based, per-purchase exchange rates already applied)
+        let recalcCumKrw = 0;
         const displayRows = periodRows.map(r => {
           const excluded = excludedMonths.has(r.shipment_month);
-          if (!excluded) recalcCum += r.effect_usd;
-          return { ...r, _excluded: excluded, _cumulativeUsd: excluded ? null : recalcCum };
+          if (!excluded) recalcCumKrw += (r.effect_krw ?? 0);
+          return { ...r, _excluded: excluded, _cumulativeKrw: excluded ? null : recalcCumKrw };
         });
 
         // Summary aggregation
@@ -2474,6 +2492,7 @@ const PurchasesTab = () => {
           qty: rows.reduce((s, r) => s + (r.qty ?? r.total_qty ?? 0), 0),
           amount: rows.reduce((s, r) => s + (r.amount ?? r.total_amount ?? 0), 0),
           effectUsd: rows.reduce((s, r) => s + r.effect_usd, 0),
+          effectKrw: rows.reduce((s, r) => s + (r.effect_krw ?? 0), 0),
           months: rows.length,
           success: rows.filter(r => r.effect_usd > 0).length,
         });
@@ -2486,11 +2505,11 @@ const PurchasesTab = () => {
         const eLabel = (usd: number) => usd > 0 ? '절감' : usd < 0 ? '초과' : '-';
         const eBadge = (usd: number) => usd > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700';
 
-        // Render expandable purchase sub-rows
+        // Render expandable purchase sub-rows (with per-purchase market price + exchange rate)
         const renderPurchaseSubRows = (purchases: PrebuyPurchaseDetail[]) => (
           purchases.map(p => {
-            const isEditing = editingMarketId === p.id;
-            const effUsd = p.market_price_usd != null ? (p.market_price_usd * p.qty_mt - p.amount_usd) : 0;
+            const isEditingMp = editingMarketId === p.id;
+            const isEditingEr = editingExRateId === p.id;
             return (
               <tr key={`sub-${p.id}`} className="bg-blue-50/30 border-b border-blue-100/50">
                 <td className="px-2 py-1.5"></td>
@@ -2498,13 +2517,10 @@ const PurchasesTab = () => {
                   <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 ${p.product === 'RBD' ? 'bg-blue-400' : 'bg-emerald-400'}`}></span>
                   {p.order_no || '-'}
                 </td>
-                <td className="px-3 py-1.5 text-[10px] text-slate-500">
-                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${p.product === 'RBD' ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}`}>{p.product}</span>
-                </td>
                 <td className="px-3 py-1.5 tabular-nums text-[10px] text-slate-600 text-right">{formatNumber(p.qty_mt, 0)}</td>
                 <td className="px-3 py-1.5 tabular-nums text-[10px] text-slate-600 text-right">${formatNumber(p.unit_price, 2)}</td>
-                <td className="px-3 py-1.5 tabular-nums text-[10px] text-right">
-                  {isEditing ? (
+                <td className="px-3 py-1.5 tabular-nums text-[10px] text-right" onClick={e => e.stopPropagation()}>
+                  {isEditingMp ? (
                     <div className="flex items-center gap-1 justify-end">
                       <input type="number" step="0.1" value={marketInput}
                         onChange={(e) => setMarketInput(e.target.value)}
@@ -2514,16 +2530,32 @@ const PurchasesTab = () => {
                     </div>
                   ) : (
                     <span className="cursor-pointer text-blue-600 hover:underline"
-                      onClick={() => { setEditingMarketId(p.id); setMarketInput(p.market_price_usd?.toString() || ''); }}>
+                      onClick={() => { setEditingMarketId(p.id); setEditingExRateId(null); setMarketInput(p.market_price_usd?.toString() || ''); }}>
                       {p.market_price_usd != null ? `$${formatNumber(p.market_price_usd, 2)}` : <span className="text-slate-300 italic">미입력</span>}
                     </span>
                   )}
                 </td>
-                <td className={`px-3 py-1.5 tabular-nums text-[10px] font-medium text-right ${eColor(effUsd)}`}>
-                  {p.market_price_usd != null ? `$${formatNumber(effUsd, 0)}` : '-'}
+                <td className="px-3 py-1.5 tabular-nums text-[10px] text-right" onClick={e => e.stopPropagation()}>
+                  {isEditingEr ? (
+                    <div className="flex items-center gap-1 justify-end">
+                      <input type="number" step="1" value={exRateInput}
+                        onChange={(e) => setExRateInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handlePurchaseExRateSave(p.id); if (e.key === 'Escape') setEditingExRateId(null); }}
+                        className="w-16 px-1 py-0.5 border border-amber-300 rounded text-[10px] text-right bg-white" autoFocus />
+                      <button onClick={() => handlePurchaseExRateSave(p.id)} disabled={savingMarket} className="text-amber-600 text-[9px] font-medium">{savingMarket ? '...' : '저장'}</button>
+                    </div>
+                  ) : (
+                    <span className="cursor-pointer text-amber-600 hover:underline"
+                      onClick={() => { setEditingExRateId(p.id); setEditingMarketId(null); setExRateInput(p.exchange_rate?.toString() || '1450'); }}>
+                      {p.exchange_rate?.toLocaleString() || '1,450'}
+                    </span>
+                  )}
                 </td>
-                <td className={`px-3 py-1.5 tabular-nums text-[10px] font-medium text-right ${eColor(effUsd)}`}>
-                  {p.market_price_usd != null ? formatKRW(effUsd * exchangeRate) : '-'}
+                <td className={`px-3 py-1.5 tabular-nums text-[10px] font-medium text-right ${eColor(p.effect_usd)}`}>
+                  {p.market_price_usd != null ? `$${formatNumber(p.effect_usd, 0)}` : '-'}
+                </td>
+                <td className={`px-3 py-1.5 tabular-nums text-[10px] font-medium text-right ${eColor(p.effect_usd)}`}>
+                  {p.market_price_usd != null ? formatKRW(p.effect_krw) : '-'}
                 </td>
                 <td className="px-3 py-1.5"></td>
               </tr>
@@ -2550,10 +2582,6 @@ const PurchasesTab = () => {
             )}
 
             <div className="ml-auto flex items-center gap-2 text-xs">
-              <label className="text-slate-500">환율:</label>
-              <input type="number" value={exchangeRate} onChange={e => setExchangeRate(Number(e.target.value) || 0)}
-                className="w-20 px-2 py-1 border border-slate-200 rounded-lg text-xs text-right bg-white focus:outline-none focus:ring-1 focus:ring-blue-400" />
-              <span className="text-slate-300">|</span>
               <span className="text-slate-500">기간:</span>
               <select value={pFrom} onChange={e => setPeriodFrom(e.target.value)}
                 className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
@@ -2600,7 +2628,7 @@ const PurchasesTab = () => {
                           <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">{formatNumber(sum.qty, 0)}</td>
                           <td className="px-5 py-3.5 tabular-nums text-slate-700 text-right">${formatNumber(sum.amount, 0)}</td>
                           <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${eColor(sum.effectUsd)}`}>${formatNumber(sum.effectUsd, 0)}</td>
-                          <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${eColor(sum.effectUsd)}`}>{formatKRW(sum.effectUsd * exchangeRate)}</td>
+                          <td className={`px-5 py-3.5 tabular-nums font-semibold text-right ${eColor(sum.effectUsd)}`}>{formatKRW(sum.effectKrw)}</td>
                           <td className="px-5 py-3.5 tabular-nums text-slate-600 text-center">{sum.months}개월</td>
                           <td className="px-5 py-3.5 tabular-nums text-center">{sum.months > 0 ? `${Math.round(sum.success / sum.months * 100)}%` : '-'}</td>
                           <td className="px-5 py-3.5 text-center">
@@ -2613,7 +2641,7 @@ const PurchasesTab = () => {
                         <td className="px-5 py-3.5 tabular-nums text-slate-800 text-right">{formatNumber(totalSum.qty, 0)}</td>
                         <td className="px-5 py-3.5 tabular-nums text-slate-800 text-right">${formatNumber(totalSum.amount, 0)}</td>
                         <td className={`px-5 py-3.5 tabular-nums text-right ${eColor(totalSum.effectUsd)}`}>${formatNumber(totalSum.effectUsd, 0)}</td>
-                        <td className={`px-5 py-3.5 tabular-nums text-right ${eColor(totalSum.effectUsd)}`}>{formatKRW(totalSum.effectUsd * exchangeRate)}</td>
+                        <td className={`px-5 py-3.5 tabular-nums text-right ${eColor(totalSum.effectUsd)}`}>{formatKRW(totalSum.effectKrw)}</td>
                         <td className="px-5 py-3.5 tabular-nums text-slate-600 text-center">{totalSum.months}개월</td>
                         <td className="px-5 py-3.5 tabular-nums text-center">{totalSum.months > 0 ? `${Math.round(totalSum.success / totalSum.months * 100)}%` : '-'}</td>
                         <td className="px-5 py-3.5 text-center"><span className={`text-xs font-medium px-2.5 py-1 rounded-full ${eBadge(totalSum.effectUsd)}`}>{eLabel(totalSum.effectUsd)}</span></td>
@@ -2647,7 +2675,7 @@ const PurchasesTab = () => {
                       <tbody className="divide-y divide-slate-100">
                         {displayRows.map(row => {
                           const excluded = (row as any)._excluded;
-                          const cumUsd = (row as any)._cumulativeUsd;
+                          const cumKrw = (row as any)._cumulativeKrw;
                           const isExpanded = expandedMonth === row.shipment_month;
                           return (
                             <React.Fragment key={row.shipment_month}>
@@ -2667,7 +2695,7 @@ const PurchasesTab = () => {
                                 <td className="px-3 py-2 tabular-nums text-slate-800 text-right font-medium">{formatNumber(row.total_qty ?? 0, 0)}</td>
                                 <td className="px-3 py-2 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
                                 <td className={`px-3 py-2 tabular-nums font-semibold text-right ${eColor(row.effect_usd)}`}>${formatNumber(row.effect_usd, 0)}</td>
-                                <td className={`px-3 py-2 tabular-nums font-semibold text-right ${eColor(row.effect_usd)}`}>{formatKRW(row.effect_usd * exchangeRate)}</td>
+                                <td className={`px-3 py-2 tabular-nums font-semibold text-right ${eColor(row.effect_usd)}`}>{formatKRW(row.effect_krw)}</td>
                                 <td className="px-3 py-2 text-center">
                                   {!excluded && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${eBadge(row.effect_usd)}`}>{eLabel(row.effect_usd)}</span>}
                                 </td>
@@ -2678,10 +2706,10 @@ const PurchasesTab = () => {
                                   <tr className="bg-blue-50/50">
                                     <td></td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 pl-8">주문번호</td>
-                                    <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500">제품</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">수량(MT)</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">단가(USD)</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">시황가(USD)</td>
+                                    <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">환율</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">효과(USD)</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">효과(KRW)</td>
                                     <td></td>
@@ -2706,7 +2734,7 @@ const PurchasesTab = () => {
               <div className="grid grid-cols-3 gap-3">
                 <MetricCard
                   label={`${prebuyView === 'rbd' ? 'RBD' : 'RSPO(MB)'} 선구매 효과`}
-                  value={formatKRW((prebuyView === 'rbd' ? rbdSum.effectUsd : rspoSum.effectUsd) * exchangeRate)}
+                  value={formatKRW(prebuyView === 'rbd' ? rbdSum.effectKrw : rspoSum.effectKrw)}
                   accent={(prebuyView === 'rbd' ? rbdSum.effectUsd : rspoSum.effectUsd) > 0 ? 'text-emerald-600' : 'text-rose-500'}
                 />
                 <MetricCard label="수량" value={`${formatNumber(prebuyView === 'rbd' ? rbdSum.qty : rspoSum.qty, 0)} MT`} />
@@ -2739,7 +2767,7 @@ const PurchasesTab = () => {
                       <tbody className="divide-y divide-slate-100">
                         {displayRows.map(row => {
                           const excluded = (row as any)._excluded;
-                          const cumUsd = (row as any)._cumulativeUsd;
+                          const cumKrw = (row as any)._cumulativeKrw;
                           const isExpanded = expandedMonth === row.shipment_month;
                           return (
                             <React.Fragment key={row.shipment_month}>
@@ -2757,9 +2785,9 @@ const PurchasesTab = () => {
                                 <td className="px-3 py-2 tabular-nums text-slate-800 text-right font-medium">{formatNumber(row.qty ?? 0, 0)}</td>
                                 <td className="px-3 py-2 tabular-nums text-slate-800 text-right">${formatNumber(row.wavg_price, 2)}</td>
                                 <td className={`px-3 py-2 tabular-nums font-semibold text-right ${eColor(row.effect_usd)}`}>${formatNumber(row.effect_usd, 0)}</td>
-                                <td className={`px-3 py-2 tabular-nums font-semibold text-right ${eColor(row.effect_usd)}`}>{formatKRW(row.effect_usd * exchangeRate)}</td>
-                                <td className={`px-3 py-2 tabular-nums font-semibold text-right ${excluded ? 'text-slate-400' : eColor(cumUsd ?? 0)}`}>
-                                  {excluded ? '-' : formatKRW((cumUsd ?? 0) * exchangeRate)}
+                                <td className={`px-3 py-2 tabular-nums font-semibold text-right ${eColor(row.effect_usd)}`}>{formatKRW(row.effect_krw)}</td>
+                                <td className={`px-3 py-2 tabular-nums font-semibold text-right ${excluded ? 'text-slate-400' : eColor(cumKrw ?? 0)}`}>
+                                  {excluded ? '-' : formatKRW(cumKrw ?? 0)}
                                 </td>
                                 <td className="px-3 py-2 text-center">
                                   {!excluded && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${eBadge(row.effect_usd)}`}>{eLabel(row.effect_usd)}</span>}
@@ -2770,10 +2798,10 @@ const PurchasesTab = () => {
                                   <tr className="bg-blue-50/50">
                                     <td></td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 pl-8">주문번호</td>
-                                    <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500">제품</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">수량(MT)</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">단가(USD)</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">시황가(USD)</td>
+                                    <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">환율</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">효과(USD)</td>
                                     <td className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 text-right">효과(KRW)</td>
                                   </tr>
@@ -2791,7 +2819,7 @@ const PurchasesTab = () => {
             </>
           )}
 
-          <p className="text-xs text-slate-400">* 월별 행 클릭 → 건별 시황가 입력 가능. 체크 해제 시 해당 월 제외. 환율 {exchangeRate.toLocaleString()}원 적용</p>
+          <p className="text-xs text-slate-400">* 월별 행 클릭 → 건별 시황가·환율 입력 가능. 체크 해제 시 해당 월 제외. 환율 기본값 1,450원</p>
         </>
         );
       })()}

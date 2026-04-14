@@ -110,17 +110,20 @@ export async function GET() {
         const rbdP = purchases.filter((p: any) => p.product === 'RBD');
         const rspoP = purchases.filter((p: any) => p.product === 'RSPO');
 
-        // Per-purchase effect: (market_price_usd × qty_mt) - amount_usd
+        // Per-purchase effect with per-purchase exchange_rate
         const calcGroup = (arr: any[]) => {
-          let qty = 0, amount = 0, effectUsd = 0;
+          let qty = 0, amount = 0, effectUsd = 0, effectKrw = 0;
           for (const p of arr) {
             qty += p.qty_mt || 0;
             amount += p.amount_usd || 0;
             if (p.market_price_usd != null) {
-              effectUsd += (p.market_price_usd * (p.qty_mt || 0)) - (p.amount_usd || 0);
+              const eu = (p.market_price_usd * (p.qty_mt || 0)) - (p.amount_usd || 0);
+              const er = p.exchange_rate != null ? Number(p.exchange_rate) : 1450;
+              effectUsd += eu;
+              effectKrw += eu * er;
             }
           }
-          return { qty, amount, effectUsd };
+          return { qty, amount, effectUsd, effectKrw };
         };
 
         const rbdS = calcGroup(rbdP);
@@ -129,12 +132,13 @@ export async function GET() {
         months.push({
           shipment_month: month,
           rbd_qty: rbdS.qty, rbd_amount: rbdS.amount,
-          rbd_effect_usd: rbdS.effectUsd,
+          rbd_effect_usd: rbdS.effectUsd, rbd_effect_krw: rbdS.effectKrw,
           rspo_qty: rspoS.qty, rspo_amount: rspoS.amount,
-          rspo_effect_usd: rspoS.effectUsd,
+          rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: rspoS.effectKrw,
           total_qty: rbdS.qty + rspoS.qty,
           total_amount: rbdS.amount + rspoS.amount,
           effect_usd: rbdS.effectUsd + rspoS.effectUsd,
+          effect_krw: rbdS.effectKrw + rspoS.effectKrw,
         });
       }
 
