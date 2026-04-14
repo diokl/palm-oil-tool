@@ -9,6 +9,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const product = searchParams.get('product');
     const year = searchParams.get('year');
+    const action = searchParams.get('action');
+
+    // Auto-fill suggestions from purchases: 계약월(shipment_month) +1M = 통관월
+    if (action === 'autofill') {
+      return handleAutofill(product, year ? parseInt(year) : null);
+    }
 
     let query = 'SELECT * FROM inventory';
     const conditions: string[] = [];
@@ -22,6 +28,83 @@ export async function GET(request: NextRequest) {
 
     const data = await dbAll(query, params);
     return NextResponse.json({ data });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// 구매이력 기반 자동 채우기 데이터 계산
+// 선적월(shipment_month) + 1M = 통관월(customs month)
+async function handleAutofill(product: string | null, year: number | null) {
+  try {
+    // Get all purchases
+    const purchases = await dbAll('SELECT * FROM purchases ORDER BY shipment_month, product');
+
+    // Group by product and customs_month (shipment_month + 1)
+    const autofillMap: Record<string, { customs_volume: number; total_amount: number; total_qty: number; prices: string[] }> = {};
+
+    for (const p of purchases as any[]) {
+      if (product && p.product !== product) continue;
+
+      // Calculate customs month = shipment_month + 1
+      const [sy, sm] = (p.shipment_month as string).split('-').map(Number);
+      let customsYear = sy;
+      let customsMonth = sm + 1;
+      if (customsMonth > 12) {
+        customsMonth = 1;
+        customsYear += 1;
+      }
+
+      if (year && customsYear !== year) continue;
+
+      const key = `${p.product}-${customsYear}-${customsMonth}`;
+      if (!autofillMap[key]) {
+        autofillMap[key] = { customs_volume: 0, total_amount: 0, total_qty: 0, prices: [] };
+      }
+      autofillMap[key].customs_volume += p.qty_mt || 0;
+      autofillMap[key].total_amount += p.amount_usd || 0;
+      autofillMap[key].total_qty += p.qty_mt || 0;
+      if (p.unit_price) {
+        autofillMap[key].prices.push(`$${Number(p.unit_price).toFixed(1)}`);
+      }
+    }
+
+    // Build result
+    const suggestions: Array<{
+      product: string;
+      year: number;
+      month: number;
+      customs_volume: number;
+      wavg_price: number;
+      contract_price_text: string;
+      shipment_month: string;
+    }> = [];
+
+    for (const [key, val] of Object.entries(autofillMap)) {
+      const [prod, yr, mn] = key.split('-');
+      const wavg = val.total_qty > 0 ? val.total_amount / val.total_qty : 0;
+      // Shipment month = customs month - 1
+      let shipYear = parseInt(yr);
+      let shipMonth = parseInt(mn) - 1;
+      if (shipMonth < 1) { shipMonth = 12; shipYear -= 1; }
+
+      // Deduplicate prices
+      const uniquePrices = [...new Set(val.prices)];
+
+      suggestions.push({
+        product: prod,
+        year: parseInt(yr),
+        month: parseInt(mn),
+        customs_volume: Math.round(val.customs_volume * 10) / 10,
+        wavg_price: Math.round(wavg * 10) / 10,
+        contract_price_text: uniquePrices.join(', '),
+        shipment_month: `${shipYear}-${String(shipMonth).padStart(2, '0')}`,
+      });
+    }
+
+    suggestions.sort((a, b) => a.year - b.year || a.month - b.month);
+
+    return NextResponse.json({ suggestions });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

@@ -1,12 +1,16 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   ComposedChart, Bar
 } from 'recharts';
 
-type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob';
+// ============ AUTH CONTEXT ============
+const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrite: false, role: 'user' });
+const useAuth = () => useContext(AuthContext);
+
+type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin';
 type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026';
 
 // ============ TYPES ============
@@ -514,11 +518,13 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
   onSave: (newValue: number) => void;
   format?: 'number' | 'price';
 }) => {
+  const { canWrite } = useAuth();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const startEdit = () => {
+    if (!canWrite) return;
     setEditValue(String(value));
     setEditing(true);
     setTimeout(() => inputRef.current?.select(), 50);
@@ -1037,6 +1043,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
 };
 
 const FCPOTab = () => {
+  const { canWrite } = useAuth();
   const [fcpoData, setFcpoData] = useState<any[]>([]);
   const [contractMonths, setContractMonths] = useState<string[]>([]);
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
@@ -1224,6 +1231,8 @@ const FCPOTab = () => {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold text-slate-800">FCPO 가격 추이</h2>
           <div className="flex gap-2 flex-wrap">
+            {canWrite && (
+            <>
             <div className="relative">
               <input ref={bmdFileRef} type="file" accept=".pdf" multiple onChange={handleBmdUpload} className="hidden" />
               <button
@@ -1243,6 +1252,8 @@ const FCPOTab = () => {
             >
               {showAddForm ? '취소' : '+ 수동 입력'}
             </button>
+            </>
+            )}
             <button onClick={fetchFCPOData} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors">
               새로고침
             </button>
@@ -1519,13 +1530,27 @@ const FCPOTab = () => {
   );
 };
 
+interface AutofillSuggestion {
+  product: string;
+  year: number;
+  month: number;
+  customs_volume: number;
+  wavg_price: number;
+  contract_price_text: string;
+  shipment_month: string;
+}
+
 const InventoryTab = () => {
+  const { canWrite } = useAuth();
   const [subTab, setSubTab] = useState<InventorySubTab>('rbd2026');
   const [inventoryData, setInventoryData] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState<string | null>(null);
+  const [autofillData, setAutofillData] = useState<AutofillSuggestion[]>([]);
+  const [autofillLoading, setAutofillLoading] = useState(false);
+  const [autofillApplied, setAutofillApplied] = useState(false);
 
-  useEffect(() => { fetchInventory(); }, [subTab]);
+  useEffect(() => { fetchInventory(); fetchAutofill(); }, [subTab]);
 
   const fetchInventory = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -1540,6 +1565,57 @@ const InventoryTab = () => {
       console.error('Failed to fetch inventory:', error);
     } finally {
       if (!silent) setLoading(false);
+    }
+  };
+
+  const fetchAutofill = async () => {
+    try {
+      const [product, year] = subTab.includes('rbd')
+        ? ['RBD', parseInt(subTab.slice(3))]
+        : ['RSPO', parseInt(subTab.slice(4))];
+      const res = await fetch(`/api/inventory?action=autofill&product=${product}&year=${year}`);
+      const json = await res.json();
+      setAutofillData(json.suggestions || []);
+    } catch (e) {
+      console.error('Failed to fetch autofill:', e);
+    }
+  };
+
+  const applyAutofill = async () => {
+    if (!canWrite) return;
+    setAutofillLoading(true);
+    try {
+      for (const suggestion of autofillData) {
+        const row = inventoryData.find(r => r.month === suggestion.month);
+        if (!row) continue;
+        // Update customs_volume
+        if (suggestion.customs_volume > 0) {
+          await handleCellSave(row.id, 'customs_volume', suggestion.customs_volume);
+        }
+        // Update contract_price
+        if (suggestion.contract_price_text) {
+          await fetch('/api/inventory', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id, field: 'contract_price', value: suggestion.contract_price_text, edited_by: 'autofill' }),
+          });
+        }
+        // Update contract_date (shipment_month)
+        if (suggestion.shipment_month) {
+          await fetch('/api/inventory', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id, field: 'contract_date', value: suggestion.shipment_month, edited_by: 'autofill' }),
+          });
+        }
+      }
+      setAutofillApplied(true);
+      await fetchInventory();
+      setTimeout(() => setAutofillApplied(false), 3000);
+    } catch (e) {
+      console.error('Autofill apply failed:', e);
+    } finally {
+      setAutofillLoading(false);
     }
   };
 
@@ -1609,10 +1685,26 @@ const InventoryTab = () => {
             </button>
           ))}
         </div>
-        <p className="text-xs text-slate-400">
-          <span className="inline-block w-2 h-2 bg-blue-200 rounded mr-1" />
-          셀을 클릭하면 편집할 수 있습니다
-        </p>
+        <div className="flex items-center gap-3">
+          {canWrite && autofillData.length > 0 && (
+            <button
+              onClick={applyAutofill}
+              disabled={autofillLoading}
+              className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium transition-colors shadow-sm flex items-center gap-1.5"
+              title="구매이력 기반으로 통관수량, 계약단가를 자동 채우기 (선적월+1M=통관월)"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+              {autofillLoading ? '적용 중...' : '구매이력 자동 채우기'}
+            </button>
+          )}
+          {autofillApplied && (
+            <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">적용 완료</span>
+          )}
+          <p className="text-xs text-slate-400">
+            <span className="inline-block w-2 h-2 bg-blue-200 rounded mr-1" />
+            셀을 클릭하면 편집할 수 있습니다
+          </p>
+        </div>
       </div>
 
       {/* Table */}
@@ -1642,7 +1734,9 @@ const InventoryTab = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {inventoryData.map((row) => (
+                {inventoryData.map((row) => {
+                  const af = autofillData.find(a => a.month === row.month);
+                  return (
                   <tr key={row.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="px-5 py-3 font-semibold text-slate-800">{row.month}월</td>
                     <td className="px-5 py-3">
@@ -1652,10 +1746,15 @@ const InventoryTab = () => {
                       />
                     </td>
                     <td className="px-5 py-3">
-                      <EditableCell
-                        value={row.customs_volume}
-                        onSave={(val) => handleCellSave(row.id, 'customs_volume', val)}
-                      />
+                      <div className="relative">
+                        <EditableCell
+                          value={row.customs_volume}
+                          onSave={(val) => handleCellSave(row.id, 'customs_volume', val)}
+                        />
+                        {af && af.customs_volume > 0 && row.customs_volume !== af.customs_volume && (
+                          <span className="absolute -top-1 -right-1 text-[8px] text-blue-500" title={`구매이력 기준: ${formatNumber(af.customs_volume)} (선적월: ${af.shipment_month})`}>●</span>
+                        )}
+                      </div>
                     </td>
                     <td className={`px-5 py-3 tabular-nums font-semibold text-right ${
                       row.ending_stock < 0 ? 'text-rose-600 bg-rose-50/50' :
@@ -1668,10 +1767,25 @@ const InventoryTab = () => {
                     }`}>
                       {row.coverage_days.toFixed(1)}
                     </td>
-                    <td className="px-5 py-3 tabular-nums text-slate-600 text-right">{formatPrice(Number(row.contract_price))}</td>
-                    <td className="px-5 py-3 text-xs text-slate-500">{row.contract_date?.split('\n')[0]}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600 text-right">
+                      {formatPrice(Number(row.contract_price))}
+                      {af && af.contract_price_text && (
+                        <span className="ml-1 text-[9px] text-blue-400" title={`구매이력: ${af.contract_price_text}`}>
+                          ({af.contract_price_text})
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-xs text-slate-500">
+                      {row.contract_date?.split('\n')[0]}
+                      {af && af.shipment_month && (
+                        <span className="ml-1 text-[9px] text-blue-400" title="구매이력 선적월">
+                          [{af.shipment_month}]
+                        </span>
+                      )}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1908,6 +2022,7 @@ const emptyPurchaseForm = {
 };
 
 const PurchasesTab = () => {
+  const { canWrite } = useAuth();
   const [subTab, setSubTab] = useState<'raw' | 'prebuy'>('raw');
   const [purchaseData, setPurchaseData] = useState<PurchaseItem[]>([]);
   const [rawSummary, setRawSummary] = useState<PurchasesRawResponse['summary'] | null>(null);
@@ -2208,6 +2323,7 @@ const PurchasesTab = () => {
           )}
 
           {/* Action Bar */}
+          {canWrite && (
           <div className="flex items-center gap-3 flex-wrap">
             <button onClick={openAddForm} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm">
               + 구매 추가
@@ -2220,6 +2336,7 @@ const PurchasesTab = () => {
             </button>
             {seedMsg && <span className="text-xs px-3 py-1.5 rounded-full bg-amber-50 text-amber-700">{seedMsg}</span>}
           </div>
+          )}
 
           {/* Bulk Upload Panel */}
           {showBulk && (
@@ -2423,16 +2540,18 @@ const PurchasesTab = () => {
                                 <button onClick={() => setExpandedId(isExpanded ? null : p.id)} className="p-1 text-slate-400 hover:text-blue-600" title="상세보기">
                                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isExpanded ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} /></svg>
                                 </button>
+                                {canWrite && (
                                 <button onClick={() => openEditForm(p)} className="p-1 text-slate-400 hover:text-amber-600" title="수정">
                                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                 </button>
-                                {deleteConfirm === p.id ? (
+                                )}
+                                {canWrite && (deleteConfirm === p.id ? (
                                   <button onClick={() => handleDelete(p.id)} className="p-1 text-rose-600 font-medium text-xs">확인</button>
                                 ) : (
                                   <button onClick={() => setDeleteConfirm(p.id)} className="p-1 text-slate-400 hover:text-rose-600" title="삭제">
                                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                   </button>
-                                )}
+                                ))}
                               </div>
                             </td>
                           </tr>
@@ -2828,6 +2947,7 @@ const PurchasesTab = () => {
 };
 
 const NewsTab = () => {
+  const { canWrite } = useAuth();
   const [newsData, setNewsData] = useState<NewsItem[]>([]);
   const [sentimentSummary, setSentimentSummary] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -3014,6 +3134,7 @@ const NewsTab = () => {
             <p className="text-2xl font-bold text-rose-600 tabular-nums">{sentimentCounts.약세}</p>
           </div>
         </div>
+        {canWrite && (
         <div className="flex flex-col gap-2">
           <button
             onClick={() => { setShowAddForm(!showAddForm); setShowBulkForm(false); }}
@@ -3032,6 +3153,7 @@ const NewsTab = () => {
             {showBulkForm ? '취소' : '대량 업로드'}
           </button>
         </div>
+        )}
       </div>
 
       {/* Single News Add Form — AI 자동 판단 */}
@@ -3711,6 +3833,7 @@ interface MpobRow {
 }
 
 const MPOBTab = () => {
+  const { canWrite } = useAuth();
   const [subTab, setSubTab] = useState<MpobSubTab>('stock');
   const [year, setYear] = useState(2026);
   const [availableYears, setAvailableYears] = useState<number[]>([2025, 2026]);
@@ -3810,6 +3933,7 @@ const MPOBTab = () => {
   };
 
   const handleCellClick = (cat: string, item: string, month: number, field: 'value' | 'value_rm', currentVal: number | null) => {
+    if (!canWrite) return;
     setEditCell({ cat, item, month, field });
     setEditValue(currentVal != null ? String(currentVal) : '');
     setTimeout(() => editRef.current?.select(), 50);
@@ -4057,6 +4181,7 @@ const MPOBTab = () => {
             <button onClick={addYear} className="px-2 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200" title="새 연도 추가">+</button>
           </div>
         </div>
+        {canWrite && (
         <div className="flex gap-2">
           <button onClick={() => setBulkOpen(true)} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">
             Bulk 붙여넣기
@@ -4065,6 +4190,7 @@ const MPOBTab = () => {
             {seeding ? 'Seeding...' : '초기 데이터 Seed'}
           </button>
         </div>
+        )}
       </div>
 
       {/* Sub Tabs */}
@@ -4147,6 +4273,190 @@ const MPOBTab = () => {
   );
 };
 
+// ============ ADMIN TAB ============
+
+interface AdminUser {
+  id: number;
+  username: string;
+  role: string;
+  can_write: boolean;
+  terms_agreed: boolean;
+  terms_agreed_at: string | null;
+  created_at: string;
+}
+
+const AdminTab = () => {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<number | null>(null);
+
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch('/api/admin/users');
+      const data = await res.json();
+      if (data.users) setUsers(data.users);
+    } catch (e) {
+      console.error('Failed to fetch users:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchUsers(); }, []);
+
+  const handleToggleWrite = async (userId: number, currentValue: boolean) => {
+    setActionLoading(userId);
+    try {
+      await fetch('/api/admin/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle_write', userId, canWrite: !currentValue }),
+      });
+      await fetchUsers();
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleResetPassword = async (userId: number, username: string) => {
+    if (!confirm(`${username}의 비밀번호를 초기화하시겠습니까?\n(초기화 비밀번호: samyang789987!!!)`)) return;
+    setActionLoading(userId);
+    try {
+      await fetch('/api/admin/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset_password', userId }),
+      });
+      alert('비밀번호가 초기화되었습니다.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDeleteUser = async (userId: number, username: string) => {
+    if (!confirm(`정말 ${username} 계정을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`)) return;
+    setActionLoading(userId);
+    try {
+      await fetch(`/api/admin/users?userId=${userId}`, { method: 'DELETE' });
+      await fetchUsers();
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  if (loading) return <div className="space-y-3">{[1,2,3].map(i => <Shimmer key={i} className="h-16" />)}</div>;
+
+  return (
+    <div className="space-y-6">
+      {/* Summary */}
+      <div className="grid grid-cols-3 gap-4">
+        <MetricCard label="전체 사용자" value={String(users.length)} unit="명" />
+        <MetricCard label="마스터 계정" value={String(users.filter(u => u.role === 'master').length)} unit="명" accent="text-blue-600" />
+        <MetricCard label="쓰기 권한 보유" value={String(users.filter(u => u.can_write).length)} unit="명" accent="text-emerald-600" />
+      </div>
+
+      {/* Users Table */}
+      <div className="card overflow-hidden">
+        <div className="p-4 border-b border-slate-100">
+          <h3 className="text-sm font-bold text-slate-800">사용자 관리</h3>
+          <p className="text-[11px] text-slate-400 mt-0.5">회원 목록 조회, 권한 변경, 비밀번호 초기화, 계정 삭제</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                <th className="text-left px-4 py-3 font-semibold text-slate-500">아이디</th>
+                <th className="text-center px-4 py-3 font-semibold text-slate-500">역할</th>
+                <th className="text-center px-4 py-3 font-semibold text-slate-500">쓰기 권한</th>
+                <th className="text-center px-4 py-3 font-semibold text-slate-500">약관 동의</th>
+                <th className="text-center px-4 py-3 font-semibold text-slate-500">가입일</th>
+                <th className="text-center px-4 py-3 font-semibold text-slate-500">관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map(user => (
+                <tr key={user.id} className="border-b border-slate-50 hover:bg-slate-50/50">
+                  <td className="px-4 py-3 font-medium text-slate-800">
+                    {user.username}
+                    {user.role === 'master' && (
+                      <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">MASTER</span>
+                    )}
+                  </td>
+                  <td className="text-center px-4 py-3">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${user.role === 'master' ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                      {user.role}
+                    </span>
+                  </td>
+                  <td className="text-center px-4 py-3">
+                    {user.role === 'master' ? (
+                      <span className="text-[10px] text-blue-500 font-medium">항상 허용</span>
+                    ) : (
+                      <button
+                        onClick={() => handleToggleWrite(user.id, user.can_write)}
+                        disabled={actionLoading === user.id}
+                        className={`text-[10px] px-3 py-1 rounded-full font-medium transition-colors ${
+                          user.can_write
+                            ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                            : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                        }`}
+                      >
+                        {user.can_write ? '허용' : '거부'}
+                      </button>
+                    )}
+                  </td>
+                  <td className="text-center px-4 py-3">
+                    <span className={`text-[10px] ${user.terms_agreed ? 'text-emerald-500' : 'text-slate-300'}`}>
+                      {user.terms_agreed ? '동의' : '미동의'}
+                    </span>
+                  </td>
+                  <td className="text-center px-4 py-3 text-slate-400 tabular-nums">
+                    {user.created_at ? new Date(user.created_at).toLocaleDateString('ko-KR') : '-'}
+                  </td>
+                  <td className="text-center px-4 py-3">
+                    {user.role !== 'master' ? (
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => handleResetPassword(user.id, user.username)}
+                          disabled={actionLoading === user.id}
+                          className="px-2 py-1 text-[10px] bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-100 transition-colors font-medium"
+                          title="비밀번호 초기화"
+                        >
+                          PW초기화
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user.id, user.username)}
+                          disabled={actionLoading === user.id}
+                          className="px-2 py-1 text-[10px] bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100 transition-colors font-medium"
+                          title="계정 삭제"
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="card p-4 bg-blue-50/50">
+        <p className="text-xs text-blue-700 font-medium">관리자 안내</p>
+        <ul className="mt-2 space-y-1 text-[11px] text-blue-600">
+          <li>• 일반 회원은 기본적으로 읽기 전용 권한으로 가입됩니다.</li>
+          <li>• 쓰기 권한을 부여하면 데이터 수정, 추가, 삭제가 가능합니다.</li>
+          <li>• 비밀번호 초기화 시 기본 비밀번호: <span className="font-mono font-semibold">samyang789987!!!</span></li>
+          <li>• 마스터 계정은 삭제할 수 없습니다.</li>
+        </ul>
+      </div>
+    </div>
+  );
+};
+
 // ============ MAIN COMPONENT ============
 
 export default function Home() {
@@ -4155,12 +4465,30 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [userRole, setUserRole] = useState<string>('user');
+  const [userName, setUserName] = useState<string>('');
+  const [canWrite, setCanWrite] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
+    fetchUserInfo();
     const interval = setInterval(fetchDashboardData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  const fetchUserInfo = async () => {
+    try {
+      const res = await fetch('/api/auth/check');
+      const data = await res.json();
+      if (data.authenticated) {
+        setUserName(data.user || '');
+        setUserRole(data.role || 'user');
+        setCanWrite(data.canWrite || data.role === 'master');
+      }
+    } catch (e) {
+      console.error('Failed to fetch user info:', e);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -4175,7 +4503,7 @@ export default function Home() {
     }
   };
 
-  const navItems: { id: Tab; label: string; icon: string }[] = [
+  const navItems: { id: Tab; label: string; icon: string; masterOnly?: boolean }[] = [
     { id: 'dashboard', label: '대시보드', icon: '📊' },
     { id: 'fcpo', label: 'FCPO 가격', icon: '📈' },
     { id: 'inventory', label: '재고 관리', icon: '📦' },
@@ -4186,11 +4514,13 @@ export default function Home() {
     { id: 'mpob', label: 'MPOB', icon: '🏛️' },
     { id: 'lc', label: 'LC 개설', icon: '📄' },
     { id: 'doc-verify', label: '서류 검증', icon: '✅' },
+    { id: 'admin', label: '관리자', icon: '⚙️', masterOnly: true },
   ];
 
   const alertCount = dashboardData?.alerts?.filter(a => a.alert_level !== 'normal').length || 0;
 
   return (
+    <AuthContext.Provider value={{ canWrite, role: userRole }}>
     <div className="flex h-screen bg-slate-100">
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
@@ -4214,7 +4544,7 @@ export default function Home() {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {navItems.map((item) => (
+          {navItems.filter(item => !item.masterOnly || userRole === 'master').map((item) => (
             <button
               key={item.id}
               onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }}
@@ -4242,12 +4572,14 @@ export default function Home() {
             <p className="tabular-nums">{lastSyncTime || '대기 중'}</p>
           </div>
           <div className="flex items-center gap-2.5 pt-2 border-t border-slate-100">
-            <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
-              <span className="text-white text-[10px] font-bold">봉</span>
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${userRole === 'master' ? 'bg-gradient-to-br from-blue-500 to-indigo-600' : 'bg-gradient-to-br from-slate-400 to-slate-500'}`}>
+              <span className="text-white text-[10px] font-bold">{userName ? userName[0].toUpperCase() : '?'}</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-slate-700 truncate">고봉주 매니저</p>
-              <p className="text-[10px] text-slate-400 truncate">기초소재구매파트</p>
+              <p className="text-xs font-medium text-slate-700 truncate">{userName || '사용자'}</p>
+              <p className="text-[10px] text-slate-400 truncate">
+                {userRole === 'master' ? 'Master' : (canWrite ? '읽기/쓰기' : '읽기 전용')}
+              </p>
             </div>
             <button
               onClick={async () => {
@@ -4308,8 +4640,10 @@ export default function Home() {
           {activeTab === 'mpob' && <MPOBTab />}
           {activeTab === 'lc' && <LCTab />}
           {activeTab === 'doc-verify' && <DocVerifyTab />}
+          {activeTab === 'admin' && userRole === 'master' && <AdminTab />}
         </div>
       </main>
     </div>
+    </AuthContext.Provider>
   );
 }
