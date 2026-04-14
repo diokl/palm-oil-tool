@@ -56,6 +56,16 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
+    if (action === 'approve') {
+      await dbRun('UPDATE users SET approved = TRUE WHERE id = ?', [userId]);
+      return NextResponse.json({ success: true, message: '승인되었습니다' });
+    }
+
+    if (action === 'revoke_approval') {
+      await dbRun('UPDATE users SET approved = FALSE WHERE id = ? AND role != \'master\'', [userId]);
+      return NextResponse.json({ success: true });
+    }
+
     if (action === 'change_role') {
       const { role } = body;
       if (!['master', 'user'].includes(role)) {

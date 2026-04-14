@@ -73,36 +73,47 @@ export function verifySessionToken(token: string): TokenPayload {
 // ── DB-based credential validation ──
 // Master account: check env vars first, auto-create/update DB record
 // Regular users: check DB
+export type ValidationResult =
+  | { valid: true; role: string; canWrite: boolean; termsAgreed: boolean }
+  | { valid: false; reason: 'invalid' | 'pending_approval' };
+
 export async function validateCredentials(
   id: string,
   password: string
-): Promise<{ valid: boolean; role: string; canWrite: boolean; termsAgreed: boolean } | null> {
-  // Master account via env vars
+): Promise<ValidationResult> {
+  // Master account via env vars (always auto-approved)
   if (id === ADMIN_ID && password === ADMIN_PW) {
-    // Ensure master user exists in DB
     const existing = await dbGet('SELECT * FROM users WHERE username = ?', [ADMIN_ID]);
     if (!existing) {
       const salt = generateSalt();
       const hash = hashPassword(ADMIN_PW, salt);
       try {
         await dbRun(
-          `INSERT INTO users (username, password_hash, salt, role, can_write, terms_agreed, terms_agreed_at)
-           VALUES (?, ?, ?, 'master', TRUE, TRUE, NOW())`,
+          `INSERT INTO users (username, password_hash, salt, role, can_write, approved, terms_agreed, terms_agreed_at)
+           VALUES (?, ?, ?, 'master', TRUE, TRUE, TRUE, NOW())`,
           [ADMIN_ID, hash, salt]
         );
       } catch (e: any) {
         console.warn('Master user auto-create skipped:', e.message);
       }
+    } else if (!existing.approved) {
+      // Ensure master is always approved (in case of old DB)
+      await dbRun('UPDATE users SET approved = TRUE WHERE username = ?', [ADMIN_ID]);
     }
     return { valid: true, role: 'master', canWrite: true, termsAgreed: true };
   }
 
-  // DB-based check for all users (including master if password changed in DB)
+  // DB-based check for regular users
   const user = await dbGet('SELECT * FROM users WHERE username = ?', [id]);
-  if (!user) return null;
+  if (!user) return { valid: false, reason: 'invalid' };
 
-  const isValid = verifyPassword(password, user.password_hash, user.salt);
-  if (!isValid) return null;
+  const isValidPassword = verifyPassword(password, user.password_hash, user.salt);
+  if (!isValidPassword) return { valid: false, reason: 'invalid' };
+
+  // Check approval status (masters are always approved)
+  if (!user.approved && user.role !== 'master') {
+    return { valid: false, reason: 'pending_approval' };
+  }
 
   return {
     valid: true,

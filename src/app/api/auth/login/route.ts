@@ -11,7 +11,13 @@ export async function POST(request: NextRequest) {
 
     const result = await validateCredentials(id, password);
 
-    if (!result || !result.valid) {
+    if (!result.valid) {
+      if (result.reason === 'pending_approval') {
+        return NextResponse.json({
+          error: '관리자 승인 대기중입니다. 마스터 계정 관리자에게 문의하세요.',
+          pending: true,
+        }, { status: 403 });
+      }
       return NextResponse.json({ error: 'ID 또는 비밀번호가 올바르지 않습니다' }, { status: 401 });
     }
 

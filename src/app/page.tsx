@@ -4280,6 +4280,7 @@ interface AdminUser {
   username: string;
   role: string;
   can_write: boolean;
+  approved: boolean;
   terms_agreed: boolean;
   terms_agreed_at: string | null;
   created_at: string;
@@ -4303,6 +4304,20 @@ const AdminTab = () => {
   };
 
   useEffect(() => { fetchUsers(); }, []);
+
+  const handleApprove = async (userId: number, approve: boolean) => {
+    setActionLoading(userId);
+    try {
+      await fetch('/api/admin/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: approve ? 'approve' : 'revoke_approval', userId }),
+      });
+      await fetchUsers();
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   const handleToggleWrite = async (userId: number, currentValue: boolean) => {
     setActionLoading(userId);
@@ -4346,12 +4361,32 @@ const AdminTab = () => {
 
   if (loading) return <div className="space-y-3">{[1,2,3].map(i => <Shimmer key={i} className="h-16" />)}</div>;
 
+  const pendingUsers = users.filter(u => !u.approved && u.role !== 'master');
+
   return (
     <div className="space-y-6">
+      {/* Pending approval alert */}
+      {pendingUsers.length > 0 && (
+        <div className="card p-4 border-l-4 border-l-amber-500 bg-amber-50/60">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-amber-100 text-amber-600">
+              <span className="text-base">⏳</span>
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-slate-800">승인 대기중 사용자: {pendingUsers.length}명</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {pendingUsers.map(u => u.username).join(', ')} — 아래 테이블에서 승인/거부할 수 있습니다.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <MetricCard label="전체 사용자" value={String(users.length)} unit="명" />
         <MetricCard label="마스터 계정" value={String(users.filter(u => u.role === 'master').length)} unit="명" accent="text-blue-600" />
+        <MetricCard label="승인 대기" value={String(pendingUsers.length)} unit="명" accent="text-amber-600" />
         <MetricCard label="쓰기 권한 보유" value={String(users.filter(u => u.can_write).length)} unit="명" accent="text-emerald-600" />
       </div>
 
@@ -4367,6 +4402,7 @@ const AdminTab = () => {
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="text-left px-4 py-3 font-semibold text-slate-500">아이디</th>
                 <th className="text-center px-4 py-3 font-semibold text-slate-500">역할</th>
+                <th className="text-center px-4 py-3 font-semibold text-slate-500">승인 상태</th>
                 <th className="text-center px-4 py-3 font-semibold text-slate-500">쓰기 권한</th>
                 <th className="text-center px-4 py-3 font-semibold text-slate-500">약관 동의</th>
                 <th className="text-center px-4 py-3 font-semibold text-slate-500">가입일</th>
@@ -4374,12 +4410,17 @@ const AdminTab = () => {
               </tr>
             </thead>
             <tbody>
-              {users.map(user => (
-                <tr key={user.id} className="border-b border-slate-50 hover:bg-slate-50/50">
+              {users.map(user => {
+                const isPending = !user.approved && user.role !== 'master';
+                return (
+                <tr key={user.id} className={`border-b border-slate-50 hover:bg-slate-50/50 ${isPending ? 'bg-amber-50/30' : ''}`}>
                   <td className="px-4 py-3 font-medium text-slate-800">
                     {user.username}
                     {user.role === 'master' && (
                       <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">MASTER</span>
+                    )}
+                    {isPending && (
+                      <span className="ml-2 text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-semibold">대기</span>
                     )}
                   </td>
                   <td className="text-center px-4 py-3">
@@ -4389,12 +4430,35 @@ const AdminTab = () => {
                   </td>
                   <td className="text-center px-4 py-3">
                     {user.role === 'master' ? (
+                      <span className="text-[10px] text-blue-500 font-medium">자동 승인</span>
+                    ) : user.approved ? (
+                      <button
+                        onClick={() => handleApprove(user.id, false)}
+                        disabled={actionLoading === user.id}
+                        className="text-[10px] px-3 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors"
+                        title="승인 취소"
+                      >
+                        승인됨
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleApprove(user.id, true)}
+                        disabled={actionLoading === user.id}
+                        className="text-[10px] px-3 py-1 rounded-full font-medium bg-amber-500 text-white hover:bg-amber-600 transition-colors shadow-sm"
+                      >
+                        승인하기
+                      </button>
+                    )}
+                  </td>
+                  <td className="text-center px-4 py-3">
+                    {user.role === 'master' ? (
                       <span className="text-[10px] text-blue-500 font-medium">항상 허용</span>
                     ) : (
                       <button
                         onClick={() => handleToggleWrite(user.id, user.can_write)}
-                        disabled={actionLoading === user.id}
+                        disabled={actionLoading === user.id || !user.approved}
                         className={`text-[10px] px-3 py-1 rounded-full font-medium transition-colors ${
+                          !user.approved ? 'bg-slate-50 text-slate-300 cursor-not-allowed' :
                           user.can_write
                             ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
                             : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
@@ -4437,7 +4501,8 @@ const AdminTab = () => {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
