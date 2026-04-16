@@ -569,6 +569,63 @@ const EditableCell = ({ value, onSave, format = 'number' }: {
   );
 };
 
+// ============ TEXT EDITABLE CELL ============
+const EditableTextCell = ({ value, onSave, placeholder = '' }: {
+  value: string;
+  onSave: (newValue: string) => void;
+  placeholder?: string;
+}) => {
+  const { canWrite } = useAuth();
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEdit = () => {
+    if (!canWrite) return;
+    setEditValue(value);
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 50);
+  };
+
+  const handleSave = () => {
+    if (editValue !== value) {
+      onSave(editValue);
+    }
+    setEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleSave();
+    if (e.key === 'Escape') setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={editValue}
+        onChange={(e) => setEditValue(e.target.value)}
+        onBlur={handleSave}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        className="w-full px-2 py-1 text-xs border border-blue-300 rounded-lg bg-blue-50/50 text-slate-800"
+        autoFocus
+      />
+    );
+  }
+
+  return (
+    <span
+      onClick={startEdit}
+      className="editable-cell inline-block w-full text-xs text-slate-500 cursor-pointer"
+      title="클릭하여 편집"
+    >
+      {value || <span className="text-slate-300">{placeholder || '—'}</span>}
+    </span>
+  );
+};
+
 // ============ DASHBOARD PREBUY TABLE ============
 
 interface DashboardPrebuyMonth {
@@ -1661,6 +1718,26 @@ const InventoryTab = () => {
     }
   };
 
+  const handleTextCellSave = async (rowId: number, field: string, value: string) => {
+    // Optimistic update
+    setInventoryData(prev => prev.map(r => r.id === rowId ? { ...r, [field]: value } : r));
+
+    try {
+      const res = await fetch('/api/inventory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: rowId, field, value, updated_by: 'user' }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data) setInventoryData(json.data);
+      }
+    } catch (error) {
+      console.error('Failed to update inventory:', error);
+      fetchInventory(true);
+    }
+  };
+
   const subTabs: { id: InventorySubTab; label: string }[] = [
     { id: 'rbd2025', label: 'RBD 2025' },
     { id: 'rbd2026', label: 'RBD 2026' },
@@ -1729,8 +1806,14 @@ const InventoryTab = () => {
                   </th>
                   <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">기말재고(kg)</th>
                   <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">재고회전일</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">계약단가</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">계약월</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    계약단가
+                    <span className="ml-1 text-blue-400">✎</span>
+                  </th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    계약월
+                    <span className="ml-1 text-blue-400">✎</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1767,16 +1850,24 @@ const InventoryTab = () => {
                     }`}>
                       {row.coverage_days.toFixed(1)}
                     </td>
-                    <td className="px-5 py-3 tabular-nums text-slate-600 text-right">
-                      {formatPrice(Number(row.contract_price))}
+                    <td className="px-5 py-3">
+                      <EditableCell
+                        value={Number(row.contract_price) || 0}
+                        onSave={(val) => handleCellSave(row.id, 'contract_price', val)}
+                        format="price"
+                      />
                       {af && af.contract_price_text && (
                         <span className="ml-1 text-[9px] text-blue-400" title={`구매이력: ${af.contract_price_text}`}>
                           ({af.contract_price_text})
                         </span>
                       )}
                     </td>
-                    <td className="px-5 py-3 text-xs text-slate-500">
-                      {row.contract_date?.split('\n')[0]}
+                    <td className="px-5 py-3">
+                      <EditableTextCell
+                        value={row.contract_date || ''}
+                        onSave={(val) => handleTextCellSave(row.id, 'contract_date', val)}
+                        placeholder="예: 2026-04"
+                      />
                       {af && af.shipment_month && (
                         <span className="ml-1 text-[9px] text-blue-400" title="구매이력 선적월">
                           [{af.shipment_month}]

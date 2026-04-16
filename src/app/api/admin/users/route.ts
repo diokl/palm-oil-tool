@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     }
 
     const users = await dbAll(
-      `SELECT id, username, role, can_write, terms_agreed, terms_agreed_at, created_at
+      `SELECT id, username, role, can_write, approved, terms_agreed, terms_agreed_at, created_at
        FROM users ORDER BY created_at DESC`
     );
 
