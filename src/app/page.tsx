@@ -1606,6 +1606,9 @@ const InventoryTab = () => {
   const [autofillData, setAutofillData] = useState<AutofillSuggestion[]>([]);
   const [autofillLoading, setAutofillLoading] = useState(false);
   const [autofillApplied, setAutofillApplied] = useState(false);
+  const [contractPdfLoading, setContractPdfLoading] = useState(false);
+  const [contractPdfResult, setContractPdfResult] = useState<string | null>(null);
+  const contractPdfRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchInventory(); fetchAutofill(); }, [subTab]);
 
@@ -1738,6 +1741,44 @@ const InventoryTab = () => {
     }
   };
 
+  const handleContractPdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setContractPdfLoading(true);
+    setContractPdfResult(null);
+
+    try {
+      const [product, year] = subTab.includes('rbd')
+        ? ['RBD', parseInt(subTab.slice(3))]
+        : ['RSPO', parseInt(subTab.slice(4))];
+
+      // Map product code to full product name for PDF parsing
+      const productForPdf = product === 'RSPO' ? 'RBD Palm Oil RSPO MB' : 'RBD Palm Oil';
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('product', product);       // for DB query
+      formData.append('product_pdf', productForPdf); // for Claude parsing hint
+      formData.append('year', String(year));
+
+      const res = await fetch('/api/inventory/upload-contracts', { method: 'POST', body: formData });
+      const json = await res.json();
+
+      if (json.success) {
+        setContractPdfResult(`${json.parsed_contracts}건 파싱 → ${json.updated_months}개월 업데이트 완료`);
+        if (json.data) setInventoryData(json.data);
+      } else {
+        setContractPdfResult(`오류: ${json.error}`);
+      }
+    } catch (err: any) {
+      setContractPdfResult(`업로드 실패: ${err.message}`);
+    } finally {
+      setContractPdfLoading(false);
+      if (contractPdfRef.current) contractPdfRef.current.value = '';
+    }
+  };
+
   const subTabs: { id: InventorySubTab; label: string }[] = [
     { id: 'rbd2025', label: 'RBD 2025' },
     { id: 'rbd2026', label: 'RBD 2026' },
@@ -1777,6 +1818,31 @@ const InventoryTab = () => {
           {autofillApplied && (
             <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">적용 완료</span>
           )}
+          {canWrite && (
+            <>
+              <input
+                ref={contractPdfRef}
+                type="file"
+                accept=".pdf"
+                onChange={handleContractPdfUpload}
+                className="hidden"
+              />
+              <button
+                onClick={() => contractPdfRef.current?.click()}
+                disabled={contractPdfLoading}
+                className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 font-medium transition-colors shadow-sm flex items-center gap-1.5"
+                title="계약 PDF를 업로드하면 선적월별 가중평균 단가와 계약일을 자동 매칭합니다"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                {contractPdfLoading ? 'AI 분석 중...' : '계약 PDF 업로드'}
+              </button>
+            </>
+          )}
+          {contractPdfResult && (
+            <span className={`text-xs px-2 py-1 rounded-lg ${contractPdfResult.startsWith('오류') || contractPdfResult.startsWith('업로드 실패') ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50'}`}>
+              {contractPdfResult}
+            </span>
+          )}
           <p className="text-xs text-slate-400">
             <span className="inline-block w-2 h-2 bg-blue-200 rounded mr-1" />
             셀을 클릭하면 편집할 수 있습니다
@@ -1811,7 +1877,7 @@ const InventoryTab = () => {
                     <span className="ml-1 text-blue-400">✎</span>
                   </th>
                   <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    계약월
+                    계약일
                     <span className="ml-1 text-blue-400">✎</span>
                   </th>
                 </tr>
