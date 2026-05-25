@@ -1,7 +1,12 @@
 import { dbAll } from './db';
-import type { BoxRangeResult } from './types';
+import type { BoxRangeResult, BoxRangeMode } from './types';
 
-export async function calculateBoxRange(contractMonth: string, currentPrice?: number, asOfDate?: string): Promise<BoxRangeResult | null> {
+export async function calculateBoxRange(
+  contractMonth: string,
+  currentPrice?: number,
+  asOfDate?: string,
+  mode: BoxRangeMode = '일반',
+): Promise<BoxRangeResult | null> {
   // Get all prices for this contract month, ordered by date
   const query = asOfDate
     ? `SELECT date, settlement_usd FROM fcpo_settlement
@@ -36,11 +41,34 @@ export async function calculateBoxRange(contractMonth: string, currentPrice?: nu
   const p10 = periods.find(p => p.days === 10)!;
   const p60 = periods.find(p => p.days === 60)!;
 
-  // Box range boundaries (20-day based, Excel V3 logic)
-  const full_buy_upper = Math.round(p20.average - p20.stdev);
-  const active_buy_upper = Math.round(p20.average - p20.stdev * 0.5);
-  const monitoring_upper = Math.round(p20.average + p20.stdev * 0.5);
-  const min_buy_upper = p20.high;
+  // Risk premium (전쟁이슈 모드일 때만 적용)
+  // Excel V3 B26: =IF(B25="전쟁이슈",ROUND(IF(E17<5,0,IF(E17<10,E16*0.1,IF(E17<15,E16*0.25,E16*0.5))),0),0)
+  // E17 = 20일 변동률(%), E16 = 20일 변동폭(USD)
+  let risk_premium = 0;
+  if (mode === '전쟁이슈') {
+    const vol = p20.volatility_pct;
+    const range = p20.range;
+    if (vol < 5) risk_premium = 0;
+    else if (vol < 10) risk_premium = Math.round(range * 0.1);
+    else if (vol < 15) risk_premium = Math.round(range * 0.25);
+    else risk_premium = Math.round(range * 0.5);
+  }
+
+  // Box range boundaries
+  // 일반 모드 (Excel V3 일반): MA20 ± STDEV 기반
+  // 전쟁이슈 모드 (Excel V3 전쟁이슈): 현재가 ± σ×배수 + 프리미엄
+  let full_buy_upper: number, active_buy_upper: number, monitoring_upper: number, min_buy_upper: number;
+  if (mode === '전쟁이슈') {
+    full_buy_upper   = Math.round(latest - p20.stdev * 3   + risk_premium);
+    active_buy_upper = Math.round(latest - p20.stdev * 1.5 + risk_premium);
+    monitoring_upper = Math.round(latest + p20.stdev * 1.5 + risk_premium);
+    min_buy_upper    = Math.round(latest + p20.stdev * 3   + risk_premium);
+  } else {
+    full_buy_upper   = Math.round(p20.average - p20.stdev);
+    active_buy_upper = Math.round(p20.average - p20.stdev * 0.5);
+    monitoring_upper = Math.round(p20.average + p20.stdev * 0.5);
+    min_buy_upper    = p20.high;
+  }
 
   // Determine current zone
   let current_zone: BoxRangeResult['current_zone'];
@@ -111,6 +139,8 @@ export async function calculateBoxRange(contractMonth: string, currentPrice?: nu
     contract_month: contractMonth,
     current_price: latest,
     as_of_date: latestDate,
+    mode,
+    risk_premium,
     periods,
     zones: { full_buy_upper, active_buy_upper, monitoring_upper, min_buy_upper },
     current_zone,

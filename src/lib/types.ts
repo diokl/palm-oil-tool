@@ -10,9 +10,11 @@ export interface FcpoSettlement {
 }
 
 // ===== Inventory =====
+export type Product = 'RBD' | 'RSPO' | 'MANAGED'; // MANAGED = 3-MCPD+GE+RSPO 관리팜유
+
 export interface InventoryRow {
   id?: number;
-  product: 'RBD' | 'RSPO';
+  product: Product;
   year: number;
   month: number;
   expected_usage: number | null;
@@ -32,10 +34,14 @@ export interface InventoryTable {
 }
 
 // ===== Box Range (V3 Logic) =====
+export type BoxRangeMode = '일반' | '전쟁이슈';
+
 export interface BoxRangeResult {
   contract_month: string;
   current_price: number;
   as_of_date?: string;
+  mode: BoxRangeMode;
+  risk_premium: number;       // USD/MT, 전쟁이슈 모드일 때 자동 산출 (일반=0)
   // Basic data (10/20/60 day)
   periods: {
     days: number;
@@ -47,11 +53,12 @@ export interface BoxRangeResult {
     volatility_pct: number;
   }[];
   // Box range boundaries (20-day based)
+  // 일반 모드: MA20 기반 / 전쟁이슈 모드: 현재가 ±σ×배수 + 프리미엄
   zones: {
-    full_buy_upper: number;     // 전량구매 상한 = MA20 - STDEV
-    active_buy_upper: number;   // 적극구매 상한 = MA20 - STDEV*0.5
-    monitoring_upper: number;   // 모니터링 상한 = MA20 + STDEV*0.5
-    min_buy_upper: number;      // 최소구매 상한 = HIGH(20)
+    full_buy_upper: number;     // 전량구매 상한
+    active_buy_upper: number;   // 적극구매 상한
+    monitoring_upper: number;   // 모니터링 상한
+    min_buy_upper: number;      // 최소구매 상한
   };
   // Current zone
   current_zone: '전량구매' | '적극구매' | '모니터링' | '최소구매' | '구매대기';
@@ -103,6 +110,25 @@ export interface Purchase {
   evaluation: '성공' | '실패' | null;
   product: string;
   notes: string | null;
+}
+
+// ===== Inflection Points =====
+export type InflectionSentiment = '강세' | '보합' | '약세' | '급락';
+
+export interface InflectionPoint {
+  id?: number;
+  date: string;                  // YYYY-MM-DD
+  contract_month: string;        // YYYY-MM
+  price_usd: number;             // 해당일 종가
+  prev_price_usd?: number | null;
+  change_pct?: number | null;    // (price - prev) / prev * 100
+  bmd_change?: string | null;    // 예: '+85/+82'
+  news_summary?: string | null;
+  sentiment?: InflectionSentiment | null;
+  note?: string | null;          // 비고 (예: '▲▲ 미-중 무역합의')
+  is_manual_sentiment?: number;  // 1: 수동 / 0: 자동
+  created_at?: string;
+  created_by?: string;
 }
 
 // ===== News =====

@@ -164,7 +164,7 @@ export async function seedInitialData() {
 
     if (combinations && combinations.length > 0) {
       for (const combo of combinations) {
-        const product = combo.product as 'RBD' | 'RSPO';
+        const product = combo.product as 'RBD' | 'RSPO' | 'MANAGED';
         // For 2025 data, use assumed starting stock values
         if (product === 'RBD' && combo.year === 2025) {
           await recalcInventory(product, combo.year, 2418776);

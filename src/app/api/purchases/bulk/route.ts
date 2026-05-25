@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbBatchRun } from '@/lib/db';
+import { syncCustomsVolumeForShipments } from '@/lib/inventory-calc';
+import type { Product } from '@/lib/types';
 
 /**
  * Parse tab-separated purchase data pasted from Excel.
@@ -148,11 +150,18 @@ export async function POST(request: NextRequest) {
       insertedCount += batch.length;
     }
 
+    // 영향받은 (product, shipment_month) 일괄 수집 후 한 번에 inventory.customs_volume 동기화
+    const affected = records
+      .filter(r => r.product && r.shipment_month)
+      .map(r => ({ product: r.product as Product, shipment_month: r.shipment_month as string }));
+    await syncCustomsVolumeForShipments(affected);
+
     return NextResponse.json({
       success: true,
       message: `${insertedCount}건 업로드 완료`,
       count: insertedCount,
       data: records,
+      synced_inventory: affected.length,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

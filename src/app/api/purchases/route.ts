@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun, dbGet, dbBatchRun } from '@/lib/db';
+import { calculatePrebuyEffect, getPremium, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
+import { syncCustomsVolumeForShipments, syncCustomsVolumeFromPurchases } from '@/lib/inventory-calc';
+import type { Product } from '@/lib/types';
 
 export async function GET(request: NextRequest) {
   try {
@@ -44,9 +47,10 @@ async function handleRawView() {
 }
 
 // ── Per-purchase prebuy effect calculation ──
-// effect per purchase = (market_price_usd × qty_mt - amount_usd)
-// → positive = 절감(시황가보다 싸게 샀음), negative = 초과
-// KRW = effect_usd × exchange_rate
+// market_price_usd 는 'RBD 기준 시황가'로 정의. 제품별 프리미엄은 자동 가산:
+//   정상가 = market_price_usd + PRODUCT_PREMIUM_USD[product]   (RBD:0 / RSPO:25 / MANAGED:65)
+//   effect_usd = (정상가 - unit_price) × qty_mt   → 양수 = 절감(성공)
+// 본 엔드포인트는 기존 UI 호환을 위해 양수=절감 부호(savings 규약)를 사용한다.
 
 interface PurchaseDetail {
   id: number;
@@ -60,6 +64,8 @@ interface PurchaseDetail {
   qty_mt: number;
   amount_usd: number;
   market_price_usd: number | null;
+  premium_usd: number;
+  normalized_market_price: number | null;
   exchange_rate: number;
   effect_usd: number;
   effect_krw: number;
@@ -72,6 +78,8 @@ interface MonthRow {
   rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
   // RSPO totals
   rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+  // MANAGED totals
+  managed_qty: number; managed_amount: number; managed_effect_usd: number; managed_effect_krw: number;
   // Combined
   total_qty: number; total_amount: number;
   wavg_price: number; avg_market_price: number;
@@ -96,31 +104,54 @@ async function handlePrebuySummary() {
   // Also build per-product rows
   const rbdMonths: any[] = [];
   const rspoMonths: any[] = [];
-  let rbdCum = 0, rspoCum = 0;
-  let rbdTotal = 0, rspoTotal = 0;
+  const managedMonths: any[] = [];
+  let rbdCum = 0, rspoCum = 0, managedCum = 0;
+  let rbdTotal = 0, rspoTotal = 0, managedTotal = 0;
 
   for (const [month, monthPurchases] of grouped.entries()) {
-    // Build per-purchase details (each purchase has its own exchange_rate)
+    // Build per-purchase details (each purchase has its own exchange_rate).
+    // 효과 계산은 prebuy-effect.ts 모듈에 위임 — RSPO/MANAGED는 프리미엄 자동 가산.
     const details: PurchaseDetail[] = monthPurchases.map((p: any) => {
       const mp = p.market_price_usd != null ? Number(p.market_price_usd) : null;
-      const er = p.exchange_rate != null ? Number(p.exchange_rate) : 1450;
-      const effectUsd = mp != null ? (mp * (p.qty_mt || 0) - (p.amount_usd || 0)) : 0;
-      const effectKrw = effectUsd * er;
+      const er = p.exchange_rate != null ? Number(p.exchange_rate) : DEFAULT_EXCHANGE_RATE;
+      const product = (p.product as Product);
+      const premium = getPremium(product);
+
+      let effectUsd = 0;
+      let effectKrw = 0;
+      let normalizedMarket: number | null = null;
+      if (mp != null) {
+        const r = calculatePrebuyEffect({
+          product,
+          contract_price: p.unit_price ?? 0,
+          market_price_rbd: mp,
+          qty_mt: p.qty_mt || 0,
+          exchange_rate: er,
+        });
+        // savings 부호 (양수=절감) — 기존 UI 호환
+        effectUsd = r.savings_usd;
+        effectKrw = r.savings_krw;
+        normalizedMarket = r.normalized_market_price;
+      }
+
       return {
         id: p.id, order_no: p.order_no, product: p.product,
         shipment_month: p.shipment_month, supplier: p.supplier,
         manufacturer: p.manufacturer, product_name: p.product_name,
         unit_price: p.unit_price, qty_mt: p.qty_mt, amount_usd: p.amount_usd,
         market_price_usd: mp,
+        premium_usd: premium,
+        normalized_market_price: normalizedMarket,
         exchange_rate: er,
         effect_usd: effectUsd,
         effect_krw: effectKrw,
       };
     });
 
-    // RBD / RSPO split
+    // Product split (RBD / RSPO / MANAGED)
     const rbdP = details.filter(d => d.product === 'RBD');
     const rspoP = details.filter(d => d.product === 'RSPO');
+    const managedP = details.filter(d => d.product === 'MANAGED');
 
     const sumGroup = (arr: PurchaseDetail[]) => ({
       qty: arr.reduce((s, d) => s + (d.qty_mt || 0), 0),
@@ -131,9 +162,10 @@ async function handlePrebuySummary() {
 
     const rbdS = sumGroup(rbdP);
     const rspoS = sumGroup(rspoP);
-    const totalQty = rbdS.qty + rspoS.qty;
-    const totalAmount = rbdS.amount + rspoS.amount;
-    const totalEffectUsd = rbdS.effectUsd + rspoS.effectUsd;
+    const managedS = sumGroup(managedP);
+    const totalQty = rbdS.qty + rspoS.qty + managedS.qty;
+    const totalAmount = rbdS.amount + rspoS.amount + managedS.amount;
+    const totalEffectUsd = rbdS.effectUsd + rspoS.effectUsd + managedS.effectUsd;
     const wavg = totalQty > 0 ? totalAmount / totalQty : 0;
 
     // Average market price across purchases that have one set
@@ -142,7 +174,7 @@ async function handlePrebuySummary() {
       ? withMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / withMp.reduce((s, d) => s + d.qty_mt, 0)
       : 0;
 
-    const totalEffectKrw = rbdS.effectKrw + rspoS.effectKrw;
+    const totalEffectKrw = rbdS.effectKrw + rspoS.effectKrw + managedS.effectKrw;
     cumAll += totalEffectKrw;
 
     months.push({
@@ -152,6 +184,8 @@ async function handlePrebuySummary() {
       rbd_effect_usd: rbdS.effectUsd, rbd_effect_krw: rbdS.effectKrw,
       rspo_qty: rspoS.qty, rspo_amount: rspoS.amount,
       rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: rspoS.effectKrw,
+      managed_qty: managedS.qty, managed_amount: managedS.amount,
+      managed_effect_usd: managedS.effectUsd, managed_effect_krw: managedS.effectKrw,
       total_qty: totalQty, total_amount: totalAmount,
       wavg_price: wavg, avg_market_price: avgMp,
       effect_usd: totalEffectUsd, effect_krw: totalEffectKrw,
@@ -192,12 +226,29 @@ async function handlePrebuySummary() {
         purchases: rspoP,
       });
     }
+    if (managedS.qty > 0) {
+      const managedWavg = managedS.qty > 0 ? managedS.amount / managedS.qty : 0;
+      const managedMp = managedP.filter(d => d.market_price_usd != null);
+      const managedAvgMp = managedMp.length > 0 ? managedMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / managedMp.reduce((s, d) => s + d.qty_mt, 0) : 0;
+      managedCum += managedS.effectKrw;
+      managedTotal += managedS.effectKrw;
+      managedMonths.push({
+        shipment_month: month, qty: managedS.qty, amount: managedS.amount,
+        wavg_price: managedWavg, market_price: managedAvgMp,
+        price_diff: managedWavg - managedAvgMp,
+        effect_usd: managedS.effectUsd, effect_krw: managedS.effectKrw,
+        cumulative_effect_krw: managedCum,
+        evaluation: managedS.effectUsd > 0 ? '성공' : '실패',
+        purchases: managedP,
+      });
+    }
   }
 
   return NextResponse.json({
     data: months,
-    rbd: { rows: rbdMonths, total_effect_krw: rbdTotal },
-    rspo: { rows: rspoMonths, total_effect_krw: rspoTotal },
+    rbd:     { rows: rbdMonths,     total_effect_krw: rbdTotal },
+    rspo:    { rows: rspoMonths,    total_effect_krw: rspoTotal },
+    managed: { rows: managedMonths, total_effect_krw: managedTotal },
     summary: { total_effect_krw: cumAll },
   });
 }
@@ -234,6 +285,9 @@ export async function POST(request: NextRequest) {
         market_price_usd ?? null,
       ]
     );
+
+    // inventory.customs_volume 자동 동기화 (선적월+1M = 통관월)
+    await syncCustomsVolumeFromPurchases(product as Product, shipment_month);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
@@ -315,10 +369,27 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
     }
 
+    // 변경 전 (product, shipment_month) 캡처 — qty_mt/shipment_month/product가 바뀌면
+    // 변경 전후 두 곳 모두 inventory.customs_volume 재계산 필요.
+    const touchesInventory = updateKeys.some(k => k === 'qty_mt' || k === 'shipment_month' || k === 'product');
+    const before = touchesInventory
+      ? await dbGet('SELECT product, shipment_month FROM purchases WHERE id = ?', [id]) as { product: Product; shipment_month: string } | undefined
+      : undefined;
+
     const setClauses = updateKeys.map((k) => `${k} = ?`).join(', ');
     const values = updateKeys.map((k) => fields[k]);
 
     await dbRun(`UPDATE purchases SET ${setClauses} WHERE id = ?`, [...values, id]);
+
+    if (touchesInventory) {
+      const after = await dbGet('SELECT product, shipment_month FROM purchases WHERE id = ?', [id]) as { product: Product; shipment_month: string } | undefined;
+      const affected: Array<{ product: Product; shipment_month: string }> = [];
+      if (before) affected.push(before);
+      if (after && (!before || before.product !== after.product || before.shipment_month !== after.shipment_month)) {
+        affected.push(after);
+      }
+      await syncCustomsVolumeForShipments(affected);
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
@@ -335,7 +406,17 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
 
+    // 삭제 전 (product, shipment_month) 캡처 → 삭제 후 동기화
+    const before = await dbGet(
+      'SELECT product, shipment_month FROM purchases WHERE id = ?',
+      [parseInt(id)],
+    ) as { product: Product; shipment_month: string } | undefined;
+
     await dbRun('DELETE FROM purchases WHERE id = ?', [parseInt(id)]);
+
+    if (before) {
+      await syncCustomsVolumeFromPurchases(before.product, before.shipment_month);
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

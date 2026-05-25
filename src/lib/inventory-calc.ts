@@ -1,8 +1,69 @@
 import { dbAll, dbGet, dbRun, dbBatchRun } from './db';
-import type { InventoryRow, Alert } from './types';
+import type { InventoryRow, Alert, Product } from './types';
+
+// ── purchases → inventory.customs_volume 자동 동기화 ──
+//
+// 선적월(shipment_month) + 1M = 통관월(customs month) 규칙으로 inventory.customs_volume에
+// SUM(purchases.qty_mt)를 반영. recalcInventory()를 후행 호출해 ending_stock/coverage_days도 갱신.
+// purchases POST/PUT/DELETE/bulk 직후 호출되어 단일 진실 공급원(purchases)이 유지되도록 함.
+
+function shipmentToCustomsMonth(shipmentMonth: string): { year: number; month: number } | null {
+  const m = shipmentMonth.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+  const sy = parseInt(m[1], 10);
+  const sm = parseInt(m[2], 10);
+  let cy = sy;
+  let cm = sm + 1;
+  if (cm > 12) { cm = 1; cy += 1; }
+  return { year: cy, month: cm };
+}
+
+// 단일 (product, customs_month) inventory row를 purchases SUM으로 갱신 + 연도 재계산.
+export async function syncCustomsVolumeFromPurchases(
+  product: Product,
+  shipmentMonth: string,
+): Promise<void> {
+  const customs = shipmentToCustomsMonth(shipmentMonth);
+  if (!customs) return;
+
+  const row = await dbGet(
+    `SELECT COALESCE(SUM(qty_mt), 0) AS total_qty
+     FROM purchases
+     WHERE product = ? AND shipment_month = ?`,
+    [product, shipmentMonth],
+  ) as { total_qty: number };
+  const totalQty = Number(row?.total_qty) || 0;
+
+  // inventory 행이 없으면 새로 생성 (예상소요량 등은 NULL로). 있으면 customs_volume만 덮어씀.
+  await dbRun(
+    `INSERT INTO inventory (product, year, month, customs_volume, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, NOW())
+     ON CONFLICT (product, year, month) DO UPDATE SET
+       customs_volume = EXCLUDED.customs_volume,
+       updated_at     = NOW(),
+       updated_by     = EXCLUDED.updated_by`,
+    [product, customs.year, customs.month, totalQty, 'purchase_autosync'],
+  );
+
+  await recalcInventory(product, customs.year);
+}
+
+// 여러 (product, shipment_month)에 대해 중복 제거 후 일괄 동기화.
+export async function syncCustomsVolumeForShipments(
+  affected: Array<{ product: Product; shipment_month: string }>,
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const a of affected) {
+    if (!a.product || !a.shipment_month) continue;
+    const key = `${a.product}|${a.shipment_month}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await syncCustomsVolumeFromPurchases(a.product, a.shipment_month);
+  }
+}
 
 export async function recalcInventory(
-  product: 'RBD' | 'RSPO',
+  product: Product,
   year: number,
   prevYearEndingStock?: number,
   /** If rows are already fetched, pass them to skip a SELECT round trip */
@@ -55,7 +116,7 @@ export async function recalcInventory(
 export async function generateAlerts(): Promise<Alert[]> {
   const alerts: Alert[] = [];
 
-  for (const product of ['RBD', 'RSPO'] as const) {
+  for (const product of ['RBD', 'RSPO', 'MANAGED'] as const) {
     const rows = await dbAll(
       `SELECT * FROM inventory WHERE product = ? ORDER BY year ASC, month ASC`,
       [product]

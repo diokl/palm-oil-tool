@@ -3,6 +3,8 @@ import { dbAll, dbGet } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import { generateAlerts } from '@/lib/inventory-calc';
 import { calculateBoxRange } from '@/lib/box-range';
+import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
+import type { Product } from '@/lib/types';
 
 export async function GET() {
   try {
@@ -36,11 +38,12 @@ export async function GET() {
     }
 
     // Inventory summary (current year, latest month with data)
+    // MANAGED 포함 — 26년 7월부터 통관 시작하는 관리팜유
     const inventorySummary = await dbAll(
       `SELECT product, year, month, ending_stock, coverage_days
        FROM inventory
-       WHERE (product = 'RBD' AND year = 2026 AND month = 4)
-          OR (product = 'RSPO' AND year = 2026 AND month = 4)
+       WHERE product IN ('RBD', 'RSPO', 'MANAGED')
+         AND year = 2026 AND month = 4
        ORDER BY product`
     );
 
@@ -107,27 +110,37 @@ export async function GET() {
 
       const months: any[] = [];
       for (const [month, purchases] of grouped.entries()) {
-        const rbdP = purchases.filter((p: any) => p.product === 'RBD');
-        const rspoP = purchases.filter((p: any) => p.product === 'RSPO');
+        const rbdP     = purchases.filter((p: any) => p.product === 'RBD');
+        const rspoP    = purchases.filter((p: any) => p.product === 'RSPO');
+        const managedP = purchases.filter((p: any) => p.product === 'MANAGED');
 
-        // Per-purchase effect with per-purchase exchange_rate
+        // Per-purchase effect with per-purchase exchange_rate.
+        // 프리미엄 자동 가산 (RBD:0 / RSPO:+25 / MANAGED:+65) — prebuy-effect.ts 위임.
         const calcGroup = (arr: any[]) => {
           let qty = 0, amount = 0, effectUsd = 0, effectKrw = 0;
           for (const p of arr) {
             qty += p.qty_mt || 0;
             amount += p.amount_usd || 0;
             if (p.market_price_usd != null) {
-              const eu = (p.market_price_usd * (p.qty_mt || 0)) - (p.amount_usd || 0);
-              const er = p.exchange_rate != null ? Number(p.exchange_rate) : 1450;
-              effectUsd += eu;
-              effectKrw += eu * er;
+              const er = p.exchange_rate != null ? Number(p.exchange_rate) : DEFAULT_EXCHANGE_RATE;
+              const r = calculatePrebuyEffect({
+                product: p.product as Product,
+                contract_price: p.unit_price ?? 0,
+                market_price_rbd: Number(p.market_price_usd),
+                qty_mt: p.qty_mt || 0,
+                exchange_rate: er,
+              });
+              // 양수=절감 (savings 부호) — 기존 대시보드 표시 호환
+              effectUsd += r.savings_usd;
+              effectKrw += r.savings_krw;
             }
           }
           return { qty, amount, effectUsd, effectKrw };
         };
 
-        const rbdS = calcGroup(rbdP);
-        const rspoS = calcGroup(rspoP);
+        const rbdS     = calcGroup(rbdP);
+        const rspoS    = calcGroup(rspoP);
+        const managedS = calcGroup(managedP);
 
         months.push({
           shipment_month: month,
@@ -135,10 +148,12 @@ export async function GET() {
           rbd_effect_usd: rbdS.effectUsd, rbd_effect_krw: rbdS.effectKrw,
           rspo_qty: rspoS.qty, rspo_amount: rspoS.amount,
           rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: rspoS.effectKrw,
-          total_qty: rbdS.qty + rspoS.qty,
-          total_amount: rbdS.amount + rspoS.amount,
-          effect_usd: rbdS.effectUsd + rspoS.effectUsd,
-          effect_krw: rbdS.effectKrw + rspoS.effectKrw,
+          managed_qty: managedS.qty, managed_amount: managedS.amount,
+          managed_effect_usd: managedS.effectUsd, managed_effect_krw: managedS.effectKrw,
+          total_qty: rbdS.qty + rspoS.qty + managedS.qty,
+          total_amount: rbdS.amount + rspoS.amount + managedS.amount,
+          effect_usd: rbdS.effectUsd + rspoS.effectUsd + managedS.effectUsd,
+          effect_krw: rbdS.effectKrw + rspoS.effectKrw + managedS.effectKrw,
         });
       }
 

@@ -11,7 +11,15 @@ const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrit
 const useAuth = () => useContext(AuthContext);
 
 type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin';
-type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026';
+type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026' | 'managed2026';
+
+const INVENTORY_SUB_TABS: { id: InventorySubTab; label: string; product: 'RBD' | 'RSPO' | 'MANAGED'; year: number }[] = [
+  { id: 'rbd2025',     label: 'RBD 2025',        product: 'RBD',     year: 2025 },
+  { id: 'rbd2026',     label: 'RBD 2026',        product: 'RBD',     year: 2026 },
+  { id: 'rspo2025',    label: 'RSPO 2025',       product: 'RSPO',    year: 2025 },
+  { id: 'rspo2026',    label: 'RSPO 2026',       product: 'RSPO',    year: 2026 },
+  { id: 'managed2026', label: '관리팜유 2026',    product: 'MANAGED', year: 2026 },
+];
 
 // ============ TYPES ============
 
@@ -88,6 +96,7 @@ interface DashboardData {
       shipment_month: string;
       rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
       rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+      managed_qty: number; managed_amount: number; managed_effect_usd: number; managed_effect_krw: number;
       total_qty: number; total_amount: number; effect_usd: number; effect_krw: number;
     }>;
     total_records: number;
@@ -121,6 +130,8 @@ interface InventoryResponse {
 interface BoxRangeDetail {
   contract_month: string;
   current_price: number;
+  mode: '일반' | '전쟁이슈';
+  risk_premium: number;
   periods: Array<{
     days: number;
     high: number;
@@ -209,6 +220,8 @@ interface PrebuyPurchaseDetail {
   qty_mt: number;
   amount_usd: number;
   market_price_usd: number | null;
+  premium_usd?: number;                    // 자동 룩업 (RBD:0 / RSPO:25 / MANAGED:65)
+  normalized_market_price?: number | null;
   exchange_rate: number;
   effect_usd: number;
   effect_krw: number;
@@ -225,6 +238,10 @@ interface PrebuyRow {
   rspo_amount?: number;
   rspo_effect_usd?: number;
   rspo_effect_krw?: number;
+  managed_qty?: number;
+  managed_amount?: number;
+  managed_effect_usd?: number;
+  managed_effect_krw?: number;
   total_qty?: number;
   total_amount?: number;
   qty?: number;
@@ -248,6 +265,7 @@ interface PrebuyResponse {
   data: PrebuyRow[];
   rbd: PrebuyProductData;
   rspo: PrebuyProductData;
+  managed?: PrebuyProductData;
   summary: { total_effect_krw: number };
 }
 
@@ -1610,15 +1628,14 @@ const InventoryTab = () => {
   const [contractPdfResult, setContractPdfResult] = useState<string | null>(null);
   const contractPdfRef = useRef<HTMLInputElement>(null);
 
+  const currentTab = INVENTORY_SUB_TABS.find(t => t.id === subTab) ?? INVENTORY_SUB_TABS[1];
+
   useEffect(() => { fetchInventory(); fetchAutofill(); }, [subTab]);
 
   const fetchInventory = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [product, year] = subTab.includes('rbd')
-        ? ['RBD', parseInt(subTab.slice(3))]
-        : ['RSPO', parseInt(subTab.slice(4))];
-      const res = await fetch(`/api/inventory?product=${product}&year=${year}`);
+      const res = await fetch(`/api/inventory?product=${currentTab.product}&year=${currentTab.year}`);
       const json: InventoryResponse = await res.json();
       setInventoryData(json.data || []);
     } catch (error) {
@@ -1630,10 +1647,7 @@ const InventoryTab = () => {
 
   const fetchAutofill = async () => {
     try {
-      const [product, year] = subTab.includes('rbd')
-        ? ['RBD', parseInt(subTab.slice(3))]
-        : ['RSPO', parseInt(subTab.slice(4))];
-      const res = await fetch(`/api/inventory?action=autofill&product=${product}&year=${year}`);
+      const res = await fetch(`/api/inventory?action=autofill&product=${currentTab.product}&year=${currentTab.year}`);
       const json = await res.json();
       setAutofillData(json.suggestions || []);
     } catch (e) {
@@ -1749,11 +1763,10 @@ const InventoryTab = () => {
     setContractPdfResult(null);
 
     try {
-      const [product, year] = subTab.includes('rbd')
-        ? ['RBD', parseInt(subTab.slice(3))]
-        : ['RSPO', parseInt(subTab.slice(4))];
+      const { product, year } = currentTab;
 
-      // Map product code to full product name for PDF parsing
+      // Map product code to full product name for PDF parsing.
+      // MANAGED는 BMD PDF에 직접 매칭되는 항목이 없으므로 일단 RBD로 fallback.
       const productForPdf = product === 'RSPO' ? 'RBD Palm Oil RSPO MB' : 'RBD Palm Oil';
 
       const formData = new FormData();
@@ -1779,12 +1792,7 @@ const InventoryTab = () => {
     }
   };
 
-  const subTabs: { id: InventorySubTab; label: string }[] = [
-    { id: 'rbd2025', label: 'RBD 2025' },
-    { id: 'rbd2026', label: 'RBD 2026' },
-    { id: 'rspo2025', label: 'RSPO 2025' },
-    { id: 'rspo2026', label: 'RSPO 2026' },
-  ];
+  const subTabs = INVENTORY_SUB_TABS;
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -1958,6 +1966,13 @@ const BoxRangeTab = () => {
     return '2026-04';
   });
   const [asOfDate, setAsOfDate] = useState<string>('');
+  const [mode, setMode] = useState<'일반' | '전쟁이슈'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('boxrange_mode');
+      if (saved === '전쟁이슈') return '전쟁이슈';
+    }
+    return '일반';
+  });
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [boxRangeData, setBoxRangeData] = useState<BoxRangeDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1974,14 +1989,18 @@ const BoxRangeTab = () => {
   }, [contractMonth]);
 
   useEffect(() => {
+    localStorage.setItem('boxrange_mode', mode);
+  }, [mode]);
+
+  useEffect(() => {
     fetchBoxRange();
-  }, [contractMonth, asOfDate]);
+  }, [contractMonth, asOfDate, mode]);
 
   const fetchBoxRange = async () => {
     setLoading(true);
     setBoxRangeData(null);
     try {
-      let url = `/api/box-range?contract_month=${contractMonth}`;
+      let url = `/api/box-range?contract_month=${contractMonth}&mode=${encodeURIComponent(mode)}`;
       if (asOfDate) url += `&as_of_date=${asOfDate}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -2041,6 +2060,41 @@ const BoxRangeTab = () => {
               {month}
             </button>
           ))}
+        </div>
+        {/* Mode toggle: 일반 / 전쟁이슈 */}
+        <div className="mt-4 pt-4 border-t border-slate-100">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-xs font-medium text-slate-500 whitespace-nowrap">계산 모드</label>
+            <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+              <button
+                onClick={() => setMode('일반')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  mode === '일반' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                일반 (MA20 ± σ)
+              </button>
+              <button
+                onClick={() => setMode('전쟁이슈')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  mode === '전쟁이슈' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                전쟁이슈 (현재가 ± σ×3.0)
+              </button>
+            </div>
+            {boxRangeData && mode === '전쟁이슈' && (
+              <p className="text-[11px] text-rose-600 font-medium">
+                리스크 프리미엄 자동 가산: +${boxRangeData.risk_premium}/MT
+              </p>
+            )}
+            {mode === '일반' && (
+              <p className="text-[11px] text-slate-400 ml-auto">평시·안정시장 (변동률 &lt; 5%) 적용</p>
+            )}
+            {mode === '전쟁이슈' && (
+              <p className="text-[11px] text-slate-400 ml-auto">변동률 &ge; 5% 시 자동 프리미엄 가산</p>
+            )}
+          </div>
         </div>
         {/* Date selector */}
         {availableDates.length > 0 && (
