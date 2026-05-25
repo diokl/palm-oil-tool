@@ -1696,14 +1696,17 @@ const InventoryTab = () => {
   const handleCellSave = async (rowId: number, field: string, value: number) => {
     // 1) Optimistic update: recalculate locally for instant UI feedback
     setInventoryData(prev => {
+      if (prev.length === 0) return prev;
       const rows = prev.map(r => ({ ...r }));
       const idx = rows.findIndex(r => r.id === rowId);
       if (idx === -1) return prev;
       (rows[idx] as any)[field] = value;
 
-      // Derive prev-year ending stock from the first row's current values
+      // Derive prev-year ending stock from the first row's current values.
+      // 처음 입력 시작인 신규 product(예: MANAGED)는 모든 필드가 null일 수 있으므로 null-safe.
       const first = prev[0];
-      const prevYearEnd = first.ending_stock + first.expected_usage - first.customs_volume;
+      const prevYearEnd =
+        (first.ending_stock ?? 0) + (first.expected_usage ?? 0) - (first.customs_volume ?? 0);
 
       // Recalculate ending_stock & coverage_days for all rows sequentially
       let prevStock = prevYearEnd;
@@ -1914,15 +1917,15 @@ const InventoryTab = () => {
                       </div>
                     </td>
                     <td className={`px-5 py-3 tabular-nums font-semibold text-right ${
-                      row.ending_stock < 0 ? 'text-rose-600 bg-rose-50/50' :
-                      row.ending_stock < 2000000 ? 'text-amber-600 bg-amber-50/50' : 'text-slate-800'
+                      (row.ending_stock ?? 0) < 0 ? 'text-rose-600 bg-rose-50/50' :
+                      (row.ending_stock ?? 0) < 2000000 ? 'text-amber-600 bg-amber-50/50' : 'text-slate-800'
                     }`}>
                       {formatNumber(row.ending_stock)}
                     </td>
                     <td className={`px-5 py-3 tabular-nums font-semibold text-center ${
-                      row.coverage_days < 1.5 ? 'text-rose-600' : row.coverage_days < 2.5 ? 'text-amber-600' : 'text-emerald-600'
+                      (row.coverage_days ?? 0) < 1.5 ? 'text-rose-600' : (row.coverage_days ?? 0) < 2.5 ? 'text-amber-600' : 'text-emerald-600'
                     }`}>
-                      {row.coverage_days.toFixed(1)}
+                      {row.coverage_days != null ? row.coverage_days.toFixed(1) : '-'}
                     </td>
                     <td className="px-5 py-3">
                       <EditableCell
