@@ -130,7 +130,11 @@ export async function generateAlerts(): Promise<Alert[]> {
       const currentYear = new Date().getFullYear();
       const currentRow = rows.find(r => r.year === currentYear && r.month === currentMonth);
 
-      if (currentRow && currentRow.coverage_days !== null && currentRow.coverage_days <= 2.5) {
+      // 운영 시작 전 (expected_usage 가 0 또는 NULL — 예: MANAGED 26-01~06) 은 알림 스킵.
+      // 향후 사용 예정 product 의 row 가 미리 생성되어 있을 뿐 실제 운영은 안 시작했으므로
+      // 재고회전일 0 을 '구매 검토 필요' 로 오인해 경고를 띄우는 것을 방지.
+      const usage = currentRow?.expected_usage ?? 0;
+      if (currentRow && usage > 0 && currentRow.coverage_days !== null && currentRow.coverage_days <= 2.5) {
         alerts.push({
           product,
           alert_level: currentRow.coverage_days <= 1.5 ? 'critical' : 'warning',
@@ -140,6 +144,20 @@ export async function generateAlerts(): Promise<Alert[]> {
           current_price: null,
           box_range_zone: null,
           message: `${product} 재고회전일 ${currentRow.coverage_days}일 -- 추가 구매 검토 필요`,
+          action_taken: null,
+          is_active: true,
+        });
+      } else if (currentRow && usage === 0) {
+        // 운영 시작 전: 정보성 알림 (normal level)
+        alerts.push({
+          product,
+          alert_level: 'normal',
+          depletion_month: null,
+          required_volume: null,
+          recommended_shipment: null,
+          current_price: null,
+          box_range_zone: null,
+          message: `${product} ${currentYear}-${String(currentMonth).padStart(2,'0')} 운영 시작 전`,
           action_taken: null,
           is_active: true,
         });
