@@ -2102,10 +2102,12 @@ const InventoryTab = () => {
                       {row.coverage_days != null ? row.coverage_days.toFixed(1) : '-'}
                     </td>
                     <td className="px-5 py-3">
-                      <EditableCell
-                        value={Number(row.contract_price) || 0}
-                        onSave={(val) => handleCellSave(row.id, 'contract_price', val)}
-                        format="price"
+                      {/* contract_price 는 텍스트 (예: '$1078.0/$1100.0', '1013.33 (wavg)') —
+                          Number() 변환 시 NaN → 0 표시되는 버그 수정. EditableTextCell 사용. */}
+                      <EditableTextCell
+                        value={row.contract_price ?? ''}
+                        onSave={(val) => handleTextCellSave(row.id, 'contract_price', val)}
+                        placeholder="예: $1078/$1100"
                       />
                       {af && af.contract_price_text && (
                         <span className="ml-1 text-[9px] text-blue-400" title={`구매이력: ${af.contract_price_text}`}>
