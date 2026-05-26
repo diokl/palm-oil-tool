@@ -2105,7 +2105,7 @@ const InventoryTab = () => {
                       {/* contract_price 는 텍스트 (예: '$1078.0/$1100.0', '1013.33 (wavg)') —
                           Number() 변환 시 NaN → 0 표시되는 버그 수정. EditableTextCell 사용. */}
                       <EditableTextCell
-                        value={row.contract_price ?? ''}
+                        value={row.contract_price != null ? String(row.contract_price) : ''}
                         onSave={(val) => handleTextCellSave(row.id, 'contract_price', val)}
                         placeholder="예: $1078/$1100"
                       />
