@@ -650,6 +650,7 @@ interface DashboardPrebuyMonth {
   shipment_month: string;
   rbd_qty: number; rbd_amount: number; rbd_effect_usd: number; rbd_effect_krw: number;
   rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
+  managed_qty?: number; managed_amount?: number; managed_effect_usd?: number; managed_effect_krw?: number;
   total_qty: number; total_amount: number; effect_usd: number; effect_krw: number;
 }
 
@@ -671,10 +672,16 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
   const rspoEffectUsd = filtered.reduce((s, m) => s + m.rspo_effect_usd, 0);
   const rspoEffectKrw = filtered.reduce((s, m) => s + m.rspo_effect_krw, 0);
 
-  const totalQty = rbdQty + rspoQty;
-  const totalAmount = rbdAmount + rspoAmount;
-  const totalEffectUsd = rbdEffectUsd + rspoEffectUsd;
-  const totalEffectKrw = rbdEffectKrw + rspoEffectKrw;
+  // 관리팜유 (Low 3-MCPD + Low GE + RSPO)
+  const managedQty = filtered.reduce((s, m) => s + (m.managed_qty ?? 0), 0);
+  const managedAmount = filtered.reduce((s, m) => s + (m.managed_amount ?? 0), 0);
+  const managedEffectUsd = filtered.reduce((s, m) => s + (m.managed_effect_usd ?? 0), 0);
+  const managedEffectKrw = filtered.reduce((s, m) => s + (m.managed_effect_krw ?? 0), 0);
+
+  const totalQty = rbdQty + rspoQty + managedQty;
+  const totalAmount = rbdAmount + rspoAmount + managedAmount;
+  const totalEffectUsd = rbdEffectUsd + rspoEffectUsd + managedEffectUsd;
+  const totalEffectKrw = rbdEffectKrw + rspoEffectKrw + managedEffectKrw;
 
   const fmtNum = (n: number) => n === 0 ? '-' : n.toLocaleString('ko-KR', { maximumFractionDigits: 0 });
   const fmtUsd = (n: number) => n === 0 ? '-' : `$${n.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}`;
@@ -730,6 +737,16 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectUsd)}`}>{fmtUsd(rspoEffectUsd)}</td>
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(rspoEffectUsd)}`}>{fmtKrw2(rspoEffectKrw)}</td>
               <td className={`px-3 py-2 text-center ${evalColor(rspoEffectUsd)}`}>{evalLabel(rspoEffectUsd)}</td>
+            </tr>
+            <tr className="border-b border-slate-50 hover:bg-slate-50/50">
+              <td className="px-3 py-2 font-medium text-slate-700" title="Low 3-MCPD + Low GE + RSPO">
+                관리팜유 <span className="text-[10px] text-slate-400">(Low 3-MCPD+GE+RSPO)</span>
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtNum(managedQty)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(managedAmount)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(managedEffectUsd)}`}>{fmtUsd(managedEffectUsd)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(managedEffectUsd)}`}>{fmtKrw2(managedEffectKrw)}</td>
+              <td className={`px-3 py-2 text-center ${evalColor(managedEffectUsd)}`}>{evalLabel(managedEffectUsd)}</td>
             </tr>
             <tr className="bg-slate-50/80 font-semibold">
               <td className="px-3 py-2 text-slate-800">합계</td>
