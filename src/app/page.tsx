@@ -1130,6 +1130,14 @@ const FCPOTab = () => {
   const [bmdBatchResults, setBmdBatchResults] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
 
+  // BMD 텍스트 일괄 입력 (5/20 형식 자동 매핑)
+  const [showBmdText, setShowBmdText] = useState(false);
+  const [bmdText, setBmdText] = useState('');
+  const [bmdTextYear, setBmdTextYear] = useState<number>(new Date().getFullYear());
+  const [bmdTextPreview, setBmdTextPreview] = useState<any>(null);
+  const [bmdTextSaving, setBmdTextSaving] = useState(false);
+  const [bmdTextMessage, setBmdTextMessage] = useState('');
+
   // BMD PDF upload state
   const [bmdUploading, setBmdUploading] = useState(false);
   const [bmdResult, setBmdResult] = useState<any>(null);
@@ -1299,6 +1307,59 @@ const FCPOTab = () => {
     }
   };
 
+  // BMD 텍스트 → 파싱 미리보기
+  const handleBmdTextPreview = async () => {
+    if (!bmdText.trim()) return;
+    setBmdTextMessage('');
+    setBmdTextPreview(null);
+    try {
+      const res = await fetch('/api/fcpo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'bmd_text', text: bmdText, year_hint: bmdTextYear, preview: true }),
+      });
+      const json = await res.json();
+      if (json.preview) {
+        setBmdTextPreview(json);
+        setBmdTextMessage(`${json.records.length}건 파싱됨 (${json.summary.days} 거래일${json.errors.length ? `, 경고 ${json.errors.length}건` : ''})`);
+      } else {
+        setBmdTextMessage(`파싱 실패: ${json.error || '알 수 없는 오류'}`);
+      }
+    } catch (e: any) {
+      setBmdTextMessage(`오류: ${e.message}`);
+    }
+  };
+
+  // BMD 텍스트 → 일괄 적용
+  const handleBmdTextApply = async () => {
+    if (!bmdText.trim()) return;
+    setBmdTextSaving(true);
+    try {
+      const res = await fetch('/api/fcpo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'bmd_text', text: bmdText, year_hint: bmdTextYear }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setBmdTextMessage(`${json.applied}건 저장 완료${json.errors?.length ? ` (경고 ${json.errors.length}건)` : ''}`);
+        setBmdText('');
+        setBmdTextPreview(null);
+        fetchFCPOData();
+        setTimeout(() => {
+          setShowBmdText(false);
+          setBmdTextMessage('');
+        }, 2000);
+      } else {
+        setBmdTextMessage(`저장 실패: ${json.error || '알 수 없는 오류'}`);
+      }
+    } catch (e: any) {
+      setBmdTextMessage(`오류: ${e.message}`);
+    } finally {
+      setBmdTextSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
@@ -1326,6 +1387,15 @@ const FCPOTab = () => {
               }`}
             >
               {showAddForm ? '취소' : '+ 수동 입력'}
+            </button>
+            <button
+              onClick={() => { setShowBmdText(!showBmdText); setBmdTextPreview(null); setBmdTextMessage(''); }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
+                showBmdText ? 'bg-slate-200 text-slate-700' : 'bg-amber-600 text-white hover:bg-amber-700'
+              }`}
+              title="거래일별 오전/오후 BMD 텍스트를 붙여넣어 자동 매핑"
+            >
+              {showBmdText ? '취소' : '+ BMD 텍스트 일괄'}
             </button>
             </>
             )}
@@ -1401,6 +1471,93 @@ const FCPOTab = () => {
                 {saving ? '저장 중...' : '저장'}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* BMD 텍스트 일괄 입력 (자동 매핑) */}
+        {showBmdText && (
+          <div className="mb-4 p-4 bg-amber-50/50 rounded-xl border border-amber-100 space-y-3 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-slate-700">BMD 텍스트 일괄 입력</p>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500">연도</label>
+                <input
+                  type="number"
+                  value={bmdTextYear}
+                  onChange={(e) => setBmdTextYear(parseInt(e.target.value) || 2026)}
+                  className="w-20 px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-slate-500">
+              아래 형식 그대로 붙여넣으세요. 오전+오후가 모두 있으면 오후(마감가)가 우선 저장됩니다.
+            </p>
+            <pre className="text-[10px] bg-white border border-slate-200 rounded-lg p-2 overflow-x-auto text-slate-500">
+{`5/20 (수)  오전: BMD +88 | Jun 1,207.50 / 4,628 / +88 | Jul 1,207.50 / 4,662 / +91 | Aug 1,207.50 / 4,673 / +88 오후: BMD -2 | Jun 1,190.00 / 4,515 / -25 | Jul 1,190.00 / 4,555 / -16 | Aug 1,190.00 / 4,583 / -2
+5/21 (목)  오전: BMD -55 | Jun 1,175.00 / 4,465 / -50 | ... 오후: BMD -126 | Jun 1,162.50 / 4,403 / -112 | ...`}
+            </pre>
+            <textarea
+              value={bmdText}
+              onChange={(e) => { setBmdText(e.target.value); setBmdTextPreview(null); }}
+              placeholder="5/20 (수)  오전: BMD +88 | Jun 1,207.50 / 4,628 / +88 ..."
+              className="w-full h-40 px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-white resize-y"
+            />
+            <div className="flex justify-between items-center">
+              <p className="text-xs text-amber-700">{bmdTextMessage}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleBmdTextPreview}
+                  disabled={!bmdText.trim() || bmdTextSaving}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors"
+                >
+                  미리보기
+                </button>
+                <button
+                  onClick={handleBmdTextApply}
+                  disabled={!bmdText.trim() || bmdTextSaving}
+                  className="px-5 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-40 transition-colors shadow-sm"
+                >
+                  {bmdTextSaving ? '저장 중...' : '저장'}
+                </button>
+              </div>
+            </div>
+            {bmdTextPreview && bmdTextPreview.records && bmdTextPreview.records.length > 0 && (
+              <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                <div className="px-3 py-2 bg-slate-50 text-xs font-semibold text-slate-600 border-b border-slate-200">
+                  파싱 결과 미리보기 ({bmdTextPreview.records.length}건)
+                </div>
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-1.5 text-left text-slate-500">날짜</th>
+                        <th className="px-3 py-1.5 text-left text-slate-500">월물</th>
+                        <th className="px-3 py-1.5 text-right text-slate-500">USD</th>
+                        <th className="px-3 py-1.5 text-right text-slate-500">MYR</th>
+                        <th className="px-3 py-1.5 text-right text-slate-500">환율</th>
+                        <th className="px-3 py-1.5 text-center text-slate-500">세션</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {bmdTextPreview.records.map((r: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/60">
+                          <td className="px-3 py-1.5 tabular-nums">{r.date}</td>
+                          <td className="px-3 py-1.5">{r.contract_month}</td>
+                          <td className="px-3 py-1.5 tabular-nums text-right">{r.settlement_usd}</td>
+                          <td className="px-3 py-1.5 tabular-nums text-right">{r.settlement_myr}</td>
+                          <td className="px-3 py-1.5 tabular-nums text-right">{r.exchange_rate}</td>
+                          <td className="px-3 py-1.5 text-center">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${r.session === 'pm' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                              {r.session === 'pm' ? '오후(마감)' : '오전(장중)'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

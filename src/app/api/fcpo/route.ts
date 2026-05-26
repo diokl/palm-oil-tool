@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbAll, dbRun } from '@/lib/db';
+import { dbAll, dbRun, dbBatchRun } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
+import { parseBmdText } from '@/lib/parse-bmd-text';
 
 export async function GET(request: NextRequest) {
   try {
@@ -64,8 +65,53 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { date, contract_month, settlement_myr, settlement_usd, exchange_rate, source } = body;
 
+    // BMD 텍스트 일괄 모드:
+    //   body: { mode: 'bmd_text', text: '5/20 (수) 오전: BMD ...', year_hint?: 2026, preview?: true }
+    //   - preview=true 면 파싱 결과만 반환 (DB 안 만짐)
+    //   - 아니면 records 일괄 UPSERT
+    if (body.mode === 'bmd_text') {
+      const { text, year_hint, preview } = body;
+      if (!text || typeof text !== 'string') {
+        return NextResponse.json({ error: 'text 필드 필요' }, { status: 400 });
+      }
+      const parsed = parseBmdText(text, { yearHint: year_hint });
+
+      if (preview) {
+        return NextResponse.json({
+          preview: true,
+          records: parsed.records,
+          errors: parsed.errors,
+          summary: parsed.summary,
+        });
+      }
+
+      if (parsed.records.length === 0) {
+        return NextResponse.json({ error: '파싱된 데이터 없음', errors: parsed.errors }, { status: 400 });
+      }
+
+      const ops = parsed.records.map(r => ({
+        sql: `INSERT INTO fcpo_settlement (date, contract_month, settlement_myr, settlement_usd, exchange_rate, source)
+              VALUES (?, ?, ?, ?, ?, ?)
+              ON CONFLICT (date, contract_month) DO UPDATE SET
+                settlement_myr = EXCLUDED.settlement_myr,
+                settlement_usd = EXCLUDED.settlement_usd,
+                exchange_rate = EXCLUDED.exchange_rate,
+                source = EXCLUDED.source`,
+        params: [r.date, r.contract_month, r.settlement_myr, r.settlement_usd, r.exchange_rate, r.source],
+      }));
+      await dbBatchRun(ops);
+
+      return NextResponse.json({
+        success: true,
+        applied: parsed.records.length,
+        errors: parsed.errors,
+        summary: parsed.summary,
+      });
+    }
+
+    // 단건 입력 (기존 호환)
+    const { date, contract_month, settlement_myr, settlement_usd, exchange_rate, source } = body;
     await dbRun(
       `INSERT INTO fcpo_settlement (date, contract_month, settlement_myr, settlement_usd, exchange_rate, source)
        VALUES (?, ?, ?, ?, ?, ?)
