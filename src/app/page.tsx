@@ -4921,6 +4921,16 @@ export default function Home() {
   const [userRole, setUserRole] = useState<string>('user');
   const [userName, setUserName] = useState<string>('');
   const [canWrite, setCanWrite] = useState(false);
+  // 헤더 새로고침 트리거: 증가 시 활성 탭 컴포넌트가 재마운트되어 자체 fetch가 재실행됨
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [refreshSpinning, setRefreshSpinning] = useState(false);
+
+  const handleHeaderRefresh = () => {
+    setRefreshSpinning(true);
+    fetchDashboardData(); // 대시보드 데이터는 항상 함께 갱신
+    setRefreshTick(t => t + 1); // 활성 탭 컴포넌트 재마운트 (key 변경)
+    setTimeout(() => setRefreshSpinning(false), 600);
+  };
 
   useEffect(() => {
     fetchDashboardData();
@@ -5072,28 +5082,30 @@ export default function Home() {
               <p className="text-slate-400 text-xs mt-0.5">팜유 수급 관리 시스템</p>
             </div>
             <button
-              onClick={fetchDashboardData}
-              className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors shadow-sm flex items-center gap-2"
+              onClick={handleHeaderRefresh}
+              disabled={refreshSpinning}
+              className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm flex items-center gap-2"
+              title="현재 탭 데이터를 다시 불러옵니다"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className={`w-4 h-4 ${refreshSpinning ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              새로고침
+              {refreshSpinning ? '새로고침 중...' : '새로고침'}
             </button>
           </div>
 
-          {/* Tab Content */}
+          {/* Tab Content — key에 refreshTick 포함하여 헤더 새로고침 시 자동 재마운트 (자체 fetch 재실행) */}
           {activeTab === 'dashboard' && <DashboardTab data={dashboardData} loading={loading} onNavigate={setActiveTab} />}
-          {activeTab === 'fcpo' && <FCPOTab />}
-          {activeTab === 'inventory' && <InventoryTab />}
-          {activeTab === 'box-range' && <BoxRangeTab />}
-          {activeTab === 'purchases' && <PurchasesTab />}
-          {activeTab === 'news' && <NewsTab />}
-          {activeTab === 'alerts' && <AlertsTab />}
-          {activeTab === 'mpob' && <MPOBTab />}
-          {activeTab === 'lc' && <LCTab />}
-          {activeTab === 'doc-verify' && <DocVerifyTab />}
-          {activeTab === 'admin' && userRole === 'master' && <AdminTab />}
+          {activeTab === 'fcpo' && <FCPOTab key={`fcpo-${refreshTick}`} />}
+          {activeTab === 'inventory' && <InventoryTab key={`inv-${refreshTick}`} />}
+          {activeTab === 'box-range' && <BoxRangeTab key={`br-${refreshTick}`} />}
+          {activeTab === 'purchases' && <PurchasesTab key={`pur-${refreshTick}`} />}
+          {activeTab === 'news' && <NewsTab key={`news-${refreshTick}`} />}
+          {activeTab === 'alerts' && <AlertsTab key={`alerts-${refreshTick}`} />}
+          {activeTab === 'mpob' && <MPOBTab key={`mpob-${refreshTick}`} />}
+          {activeTab === 'lc' && <LCTab key={`lc-${refreshTick}`} />}
+          {activeTab === 'doc-verify' && <DocVerifyTab key={`dv-${refreshTick}`} />}
+          {activeTab === 'admin' && userRole === 'master' && <AdminTab key={`adm-${refreshTick}`} />}
         </div>
       </main>
     </div>
