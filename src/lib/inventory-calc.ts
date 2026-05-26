@@ -32,7 +32,8 @@ export async function syncCustomsVolumeFromPurchases(
      WHERE product = ? AND shipment_month = ?`,
     [product, shipmentMonth],
   ) as { total_qty: number };
-  const totalQty = Number(row?.total_qty) || 0;
+  // 단위 변환: purchases.qty_mt 는 MT 단위, inventory.customs_volume 은 kg 단위 (× 1000)
+  const totalKg = (Number(row?.total_qty) || 0) * 1000;
 
   // inventory 행이 없으면 새로 생성 (예상소요량 등은 NULL로). 있으면 customs_volume만 덮어씀.
   await dbRun(
@@ -42,7 +43,7 @@ export async function syncCustomsVolumeFromPurchases(
        customs_volume = EXCLUDED.customs_volume,
        updated_at     = NOW(),
        updated_by     = EXCLUDED.updated_by`,
-    [product, customs.year, customs.month, totalQty, 'purchase_autosync'],
+    [product, customs.year, customs.month, totalKg, 'purchase_autosync'],
   );
 
   await recalcInventory(product, customs.year);
