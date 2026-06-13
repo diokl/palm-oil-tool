@@ -3794,6 +3794,43 @@ const PurchasesTab = () => {
   );
 };
 
+// KoreaPDS 원클릭 북마클릿. String.raw로 정규식 백슬래시(\d, \s, � 등) 보존.
+// 본인 로그인 브라우저 세션에서 목록의 각 기사를 same-origin fetch로 수집 → /api/news/ingest 로 전송.
+const NEWS_BOOKMARKLET = ('java' + 'script:') + String.raw`(async()=>{try{const I='https://palm-oil-tool.vercel.app/api/news/ingest?token=57b7cacfd147c09051db8ac66e26d2e037b3112e91fb6cc7';const nz=s=>{const m=(s||'').match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);return m?m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2):'';};const rows=[...document.querySelectorAll('table tr')].map(tr=>{const a=tr.querySelector('a[href]');if(!a)return null;const d=nz(tr.innerText);const t=(a.textContent||'').trim();if(!d||!t)return null;return{date:d,title:t,url:a.href};}).filter(Boolean);if(!rows.length){alert('뉴스 목록을 못 찾았습니다. KoreaPDS 시황 목록 페이지에서 실행하세요.');return;}const dec=b=>{let h=new TextDecoder('utf-8').decode(b);if(/charset\s*=\s*["']?euc-kr/i.test(h)||(h.match(/�/g)||[]).length>5){try{h=new TextDecoder('euc-kr').decode(b);}catch(e){}}return h;};const gb=doc=>{let best='',n=0;doc.querySelectorAll('td,div,article,section,.view,.board_view,.bbs_view,.content,#content').forEach(el=>{const x=(el.textContent||'').replace(/\s+/g,' ').trim();if(x.length>n&&x.length<20000){n=x.length;best=x;}});return best;};const arts=[];for(const r of rows.slice(0,30)){try{const b=await(await fetch(r.url,{credentials:'include'})).arrayBuffer();const doc=new DOMParser().parseFromString(dec(b),'text/html');arts.push({date:r.date,title:r.title,content:gb(doc)});}catch(e){arts.push({date:r.date,title:r.title,content:''});}await new Promise(z=>setTimeout(z,150));}const res=await fetch(I,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articles:arts})});const j=await res.json();alert(res.ok?('팜유툴 가져오기 완료\n추가 '+j.added+'건 / 중복 스킵 '+j.skipped+'건'):('실패: '+(j.error||res.status)));}catch(e){alert('오류: '+e.message);}})();`;
+
+const BookmarkletInstall = () => {
+  const ref = useRef<HTMLAnchorElement>(null);
+  const [copied, setCopied] = useState(false);
+  // React가 javascript: href를 정화하지 않도록 ref로 직접 설정.
+  useEffect(() => { ref.current?.setAttribute('href', NEWS_BOOKMARKLET); }, []);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(NEWS_BOOKMARKLET); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
+  };
+  return (
+    <div className="card p-5 border-violet-100 bg-violet-50/30 space-y-3 animate-fade-in">
+      <p className="text-sm font-semibold text-slate-700">📌 KoreaPDS 원클릭 북마클릿 설치</p>
+      <ol className="text-xs text-slate-500 list-decimal ml-4 space-y-1">
+        <li>아래 <b className="text-violet-600">팜유툴 뉴스 가져오기</b> 버튼을 브라우저 <b>북마크바로 끌어다 놓기</b> (드래그)</li>
+        <li>KoreaPDS 로그인 → 팜유(BMD) 시황 <b>목록 페이지</b>에서 그 북마크 클릭</li>
+        <li>목록의 각 기사 제목+본문을 자동 수집·저장 (이미 있는 날짜+제목은 자동 스킵)</li>
+      </ol>
+      <div className="flex items-center gap-3 flex-wrap">
+        <a
+          ref={ref}
+          draggable
+          onClick={(e) => e.preventDefault()}
+          className="inline-block px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-medium cursor-move select-none shadow-sm hover:bg-violet-700"
+          title="이 버튼을 브라우저 북마크바로 드래그하세요"
+        >
+          📋 팜유툴 뉴스 가져오기
+        </a>
+        <button onClick={copy} className="text-xs text-violet-600 hover:underline">{copied ? '복사됨!' : '코드 복사'}</button>
+      </div>
+      <p className="text-[11px] text-slate-400">드래그가 안 되면 '코드 복사' → 북마크 수동 추가 → 주소(URL)란에 붙여넣기. (KoreaPDS는 서버 크롤링이 금지라, 본인 로그인 브라우저에서 수집하는 방식입니다.)</p>
+    </div>
+  );
+};
+
 const NewsTab = () => {
   const { canWrite } = useAuth();
   const [newsData, setNewsData] = useState<NewsItem[]>([]);
@@ -3815,6 +3852,7 @@ const NewsTab = () => {
   // One-click import (clipboard)
   const [oneClickLoading, setOneClickLoading] = useState(false);
   const [oneClickMsg, setOneClickMsg] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null);
+  const [showBookmarklet, setShowBookmarklet] = useState(false);
 
   // Detail/Delete
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -4059,9 +4097,21 @@ const NewsTab = () => {
           >
             {showBulkForm ? '취소' : '대량 업로드'}
           </button>
+          <button
+            onClick={() => setShowBookmarklet(v => !v)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm whitespace-nowrap ${
+              showBookmarklet ? 'bg-slate-200 text-slate-700' : 'bg-white text-violet-600 border border-violet-200 hover:bg-violet-50'
+            }`}
+            title="KoreaPDS 목록에서 클릭 1번으로 모든 기사 자동수집하는 북마클릿 설치"
+          >
+            {showBookmarklet ? '닫기' : '📌 북마클릿 설치'}
+          </button>
         </div>
         )}
       </div>
+
+      {/* 북마클릿 설치 패널 */}
+      {canWrite && showBookmarklet && <BookmarkletInstall />}
 
       {/* 원클릭 가져오기 결과/안내 */}
       {oneClickMsg && (
