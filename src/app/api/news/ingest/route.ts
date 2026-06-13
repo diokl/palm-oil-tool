@@ -66,6 +66,14 @@ async function analyzeSentiment(text: string): Promise<{ sentiment: string; impa
   return { sentiment: '보합', impact: 'Medium' };
 }
 
+// news.category 컬럼 보장 (인스턴스당 1회). IF NOT EXISTS라 멱등.
+let categoryEnsured = false;
+async function ensureCategoryColumn() {
+  if (categoryEnsured) return;
+  try { await dbRun(`ALTER TABLE news ADD COLUMN IF NOT EXISTS category TEXT`); } catch (e) { /* noop */ }
+  categoryEnsured = true;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // 토큰 검증
@@ -75,7 +83,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'invalid token' }, { status: 401, headers: CORS });
     }
 
+    await ensureCategoryColumn();
+
     const body = await request.json();
+    const category = (body.category || '기타').toString().trim() || '기타';
     const articles: Array<{ date?: string; title?: string; content?: string }> = Array.isArray(body.articles) ? body.articles : [];
     if (articles.length === 0) {
       return NextResponse.json({ error: 'articles 배열이 비었습니다' }, { status: 400, headers: CORS });
@@ -91,10 +102,10 @@ export async function POST(request: NextRequest) {
       const full = (a.content || '').trim();
       if (!date || !title) { continue; }
 
-      // 중복: 같은 날짜 + 같은 제목이 이미 있으면 스킵
+      // 중복: 같은 날짜 + 같은 제목 + 같은 카테고리가 이미 있으면 스킵
       const dup = await dbGet(
-        `SELECT 1 AS x FROM news WHERE date = ? AND content = ? LIMIT 1`,
-        [date, title],
+        `SELECT 1 AS x FROM news WHERE date = ? AND content = ? AND COALESCE(category,'') = ? LIMIT 1`,
+        [date, title, category],
       );
       if (dup) {
         skipped++;
@@ -104,8 +115,8 @@ export async function POST(request: NextRequest) {
 
       const { sentiment, impact } = await analyzeSentiment(full || title);
       await dbRun(
-        `INSERT INTO news (date, content, full_content, sentiment, impact, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
-        [date, title, full || null, sentiment, impact, 'bookmarklet'],
+        `INSERT INTO news (date, content, full_content, sentiment, impact, created_by, category) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [date, title, full || null, sentiment, impact, 'bookmarklet', category],
       );
       added++;
       results.push({ date, title, status: 'added', sentiment, impact });

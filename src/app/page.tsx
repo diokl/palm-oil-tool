@@ -290,6 +290,7 @@ interface NewsItem {
   sentiment: string;
   impact: string;
   created_by?: string;
+  category?: string;
 }
 
 interface NewsResponse {
@@ -526,7 +527,12 @@ const NewsCard = ({ news }: { news: NewsItem }) => {
   return (
     <div className="card p-4 space-y-2.5">
       <div className="flex items-center justify-between">
-        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${style}`}>{news.sentiment}</span>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${style}`}>{news.sentiment}</span>
+          {news.category && news.category !== '기타' && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">{news.category}</span>
+          )}
+        </div>
         <span className="text-xs text-slate-400">{new Date(news.date).toLocaleDateString('ko-KR')}</span>
       </div>
       <p className="text-sm text-slate-700 leading-relaxed line-clamp-3">{news.content}</p>
@@ -3890,7 +3896,7 @@ const SoybeanTab = () => {
 
 // KoreaPDS 원클릭 북마클릿. String.raw로 정규식 백슬래시(\d, \s, � 등) 보존.
 // 본인 로그인 브라우저 세션에서 목록의 각 기사를 same-origin fetch로 수집 → /api/news/ingest 로 전송.
-const NEWS_BOOKMARKLET = ('java' + 'script:') + String.raw`(async()=>{try{const I='https://palm-oil-tool.vercel.app/api/news/ingest?token=57b7cacfd147c09051db8ac66e26d2e037b3112e91fb6cc7';const nz=s=>{const m=(s||'').match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);return m?m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2):'';};const rows=[...document.querySelectorAll('table tr')].map(tr=>{const a=tr.querySelector('a[href]');if(!a)return null;const d=nz(tr.innerText);const t=(a.textContent||'').trim();if(!d||!t)return null;return{date:d,title:t,url:a.href};}).filter(Boolean);if(!rows.length){alert('뉴스 목록을 못 찾았습니다. KoreaPDS 시황 목록 페이지에서 실행하세요.');return;}const dec=b=>{let h=new TextDecoder('utf-8').decode(b);if(/charset\s*=\s*["']?euc-kr/i.test(h)||(h.match(/�/g)||[]).length>5){try{h=new TextDecoder('euc-kr').decode(b);}catch(e){}}return h;};const gb=doc=>{let best='',n=0;doc.querySelectorAll('td,div,article,section,.view,.board_view,.bbs_view,.content,#content').forEach(el=>{const x=(el.textContent||'').replace(/\s+/g,' ').trim();if(x.length>n&&x.length<20000){n=x.length;best=x;}});return best;};const arts=[];for(const r of rows.slice(0,30)){try{const b=await(await fetch(r.url,{credentials:'include'})).arrayBuffer();const doc=new DOMParser().parseFromString(dec(b),'text/html');arts.push({date:r.date,title:r.title,content:gb(doc)});}catch(e){arts.push({date:r.date,title:r.title,content:''});}await new Promise(z=>setTimeout(z,150));}const res=await fetch(I,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articles:arts})});const j=await res.json();alert(res.ok?('팜유툴 가져오기 완료\n추가 '+j.added+'건 / 중복 스킵 '+j.skipped+'건'):('실패: '+(j.error||res.status)));}catch(e){alert('오류: '+e.message);}})();`;
+const NEWS_BOOKMARKLET = ('java' + 'script:') + String.raw`(async()=>{try{const I='https://palm-oil-tool.vercel.app/api/news/ingest?token=57b7cacfd147c09051db8ac66e26d2e037b3112e91fb6cc7';const dc=(location.search.match(/deal_cd=(\d+)/)||[])[1]||'';const CAT={'1446':'팜유','1103':'곡물'};const cat=CAT[dc]||'기타';const nz=s=>{const m=(s||'').match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);return m?m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2):'';};const seen=new Set();const rows=[];[...document.querySelectorAll('table tr')].forEach(tr=>{const a=tr.querySelector('a[href*="view"]');if(!a)return;const d=nz(tr.innerText);const t=(a.textContent||'').trim();if(!d||!t)return;const k=d+'|'+t;if(seen.has(k))return;seen.add(k);rows.push({date:d,title:t,url:a.href});});if(!rows.length){alert('뉴스 기사를 못 찾았습니다. KoreaPDS 일간 섹터별 시황 목록 페이지에서 실행하세요.');return;}const dec=b=>{let h=new TextDecoder('euc-kr').decode(b);if((h.match(/�/g)||[]).length>30){h=new TextDecoder('utf-8').decode(b);}return h;};const gb=doc=>{let best='',n=0;doc.querySelectorAll('td,div,article,section,p,.view,.board_view,.content').forEach(el=>{const x=(el.textContent||'').replace(/\s+/g,' ').trim();if(x.length>n&&x.length<8000){n=x.length;best=x;}});return best;};const arts=[];for(const r of rows.slice(0,40)){try{const b=await(await fetch(r.url,{credentials:'include'})).arrayBuffer();const doc=new DOMParser().parseFromString(dec(b),'text/html');arts.push({date:r.date,title:r.title,content:gb(doc)});}catch(e){arts.push({date:r.date,title:r.title,content:''});}await new Promise(z=>setTimeout(z,120));}const res=await fetch(I,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat,articles:arts})});const j=await res.json();alert(res.ok?('['+cat+'] 가져오기 완료\n추가 '+j.added+'건 / 중복 스킵 '+j.skipped+'건'):('실패: '+(j.error||res.status)));}catch(e){alert('오류: '+e.message);}})();`;
 
 const BookmarkletInstall = () => {
   const ref = useRef<HTMLAnchorElement>(null);
@@ -3905,8 +3911,8 @@ const BookmarkletInstall = () => {
       <p className="text-sm font-semibold text-slate-700">📌 KoreaPDS 원클릭 북마클릿 설치</p>
       <ol className="text-xs text-slate-500 list-decimal ml-4 space-y-1">
         <li>아래 <b className="text-violet-600">팜유툴 뉴스 가져오기</b> 버튼을 브라우저 <b>북마크바로 끌어다 놓기</b> (드래그)</li>
-        <li>KoreaPDS 로그인 → 팜유(BMD) 시황 <b>목록 페이지</b>에서 그 북마크 클릭</li>
-        <li>목록의 각 기사 제목+본문을 자동 수집·저장 (이미 있는 날짜+제목은 자동 스킵)</li>
+        <li>KoreaPDS 로그인 → <b>일간 섹터별 시황</b> 목록(팜유 또는 곡물)에서 그 북마크 클릭</li>
+        <li>페이지의 품목(팜유 1446 / 곡물 1103)을 <b>자동 인식해 카테고리별로 저장</b>. 각 기사 제목+본문 수집 (중복은 자동 스킵)</li>
       </ol>
       <div className="flex items-center gap-3 flex-wrap">
         <a
@@ -3947,6 +3953,7 @@ const NewsTab = () => {
   const [oneClickLoading, setOneClickLoading] = useState(false);
   const [oneClickMsg, setOneClickMsg] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null);
   const [showBookmarklet, setShowBookmarklet] = useState(false);
+  const [catFilter, setCatFilter] = useState<string>('전체');
 
   // Detail/Delete
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -4340,6 +4347,29 @@ const NewsTab = () => {
         </div>
       )}
 
+      {/* 카테고리 필터 (팜유 / 곡물 / 기타 따로 보기) */}
+      {newsData.length > 0 && (() => {
+        const cats = Array.from(new Set(newsData.map(n => n.category || '기타')));
+        const order = ['팜유', '곡물', '소프트', '기타'];
+        cats.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+        const chips = ['전체', ...cats];
+        if (chips.length <= 2) return null; // 카테고리가 하나뿐이면 필터 숨김
+        return (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-slate-400 mr-1">품목:</span>
+            {chips.map(c => {
+              const cnt = c === '전체' ? newsData.length : newsData.filter(n => (n.category || '기타') === c).length;
+              return (
+                <button key={c} onClick={() => setCatFilter(c)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${catFilter === c ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}>
+                  {c} <span className={catFilter === c ? 'text-indigo-200' : 'text-slate-400'}>{cnt}</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* News List — 날짜별 그룹핑 */}
       {loading ? (
         <div className="space-y-3">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-20" />)}</div>
@@ -4381,9 +4411,10 @@ const NewsTab = () => {
             )}
           </div>
           {(() => {
-            // 날짜별 그룹핑
+            // 카테고리 필터 적용 후 날짜별 그룹핑
+            const visible = catFilter === '전체' ? newsData : newsData.filter(n => (n.category || '기타') === catFilter);
             const grouped: Record<string, NewsItem[]> = {};
-            newsData.forEach(n => {
+            visible.forEach(n => {
               const d = n.date || 'unknown';
               if (!grouped[d]) grouped[d] = [];
               grouped[d].push(n);
