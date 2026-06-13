@@ -4,6 +4,7 @@ import { seedInitialData } from '@/lib/seed-data';
 import { generateAlerts } from '@/lib/inventory-calc';
 import { calculateBoxRange } from '@/lib/box-range';
 import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
+import { getOilSpread } from '@/lib/oil-spread';
 import type { Product } from '@/lib/types';
 
 export async function GET() {
@@ -165,6 +166,10 @@ export async function GET() {
       console.warn('Prebuy effect calc skipped:', e.message);
     }
 
+    // 팜유-대두유 스프레드 (best-effort)
+    let oilSpread = null;
+    try { oilSpread = await getOilSpread(90); } catch (e: any) { console.warn('Oil spread skipped:', e.message); }
+
     return NextResponse.json({
       alerts,
       fcpo_latest: fcpoLatest,
@@ -176,6 +181,7 @@ export async function GET() {
       recent_news: recentNews,
       ai_analysis: latestAnalysis?.result ? JSON.parse(latestAnalysis.result) : null,
       prebuy_effect: prebuyEffect,
+      oil_spread: oilSpread,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

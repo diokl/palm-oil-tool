@@ -102,6 +102,18 @@ interface DashboardData {
     }>;
     total_records: number;
   } | null;
+  oil_spread?: {
+    latest: OilSpreadPoint | null;
+    prev: OilSpreadPoint | null;
+    series: OilSpreadPoint[];
+  } | null;
+}
+
+interface OilSpreadPoint {
+  date: string;
+  palm: number | null;
+  sbo: number | null;
+  spread: number | null;
 }
 
 interface FCPOData {
@@ -1073,8 +1085,101 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         <RecentPurchasesTable data={data.recent_purchases || []} loading={false} />
       </div>
 
+      {/* 팜유-대두유 스프레드 */}
+      {data.oil_spread && <OilSpreadWidget data={data.oil_spread} onNavigate={onNavigate} />}
+
       {/* MPOB 시그널 — 재고/생산/수출 3 KPI 카드 + 자동 인사이트 */}
       {data.mpob_summary && data.mpob_summary.length > 0 && <MpobSignalCards rows={data.mpob_summary} onNavigate={onNavigate} />}
+    </div>
+  );
+};
+
+// ============ OIL SPREAD WIDGET ============
+// 팜유(CPO) vs 대두유(SBO) 가격 비교 + 스프레드(대두유-팜유) 추이
+const OilSpreadWidget = ({ data, onNavigate }: {
+  data: { latest: OilSpreadPoint | null; prev: OilSpreadPoint | null; series: OilSpreadPoint[] };
+  onNavigate?: (tab: Tab) => void;
+}) => {
+  const { latest, prev, series } = data;
+  const fmt = (n: number | null | undefined) => n == null ? '—' : `$${Math.round(n).toLocaleString()}`;
+  const spreadNow = latest?.spread ?? null;
+  const spreadPrev = prev?.spread ?? null;
+  const spreadChange = (spreadNow != null && spreadPrev != null) ? spreadNow - spreadPrev : null;
+
+  // 차트용 데이터 (최근 30일)
+  const chartData = series.slice(-30).map(p => ({
+    date: p.date?.slice(5) ?? '',
+    팜유: p.palm,
+    대두유: p.sbo,
+    스프레드: p.spread,
+  }));
+
+  const signal = (() => {
+    if (spreadNow == null) return '대두유 가격을 입력하면 스프레드가 계산됩니다.';
+    if (spreadNow > 250) return `🔺 대두유 프리미엄 $${Math.round(spreadNow)} — 팜유 상대적 저평가, 팜유 수요 전환 유리`;
+    if (spreadNow < 50) return `🔻 스프레드 $${Math.round(spreadNow)} 축소 — 팜유 가격 메리트 약화`;
+    return `━ 스프레드 $${Math.round(spreadNow)} — 통상 범위`;
+  })();
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+          <span className="w-2 h-2 bg-amber-500 rounded-full" />
+          팜유 · 대두유 스프레드
+        </h3>
+        {onNavigate && <button onClick={() => onNavigate('fcpo')} className="text-xs text-blue-600 hover:underline">가격 입력 →</button>}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+        <div className="card p-4">
+          <div className="text-xs text-slate-500 mb-1">팜유 (CPO)</div>
+          <div className="text-xl font-bold text-slate-800 tabular-nums">{fmt(latest?.palm)}<span className="text-xs font-normal text-slate-400 ml-1">/MT</span></div>
+        </div>
+        <div className="card p-4">
+          <div className="text-xs text-slate-500 mb-1">대두유 (CBOT)</div>
+          <div className="text-xl font-bold text-slate-800 tabular-nums">{fmt(latest?.sbo)}<span className="text-xs font-normal text-slate-400 ml-1">/MT</span></div>
+        </div>
+        <div className="card p-4">
+          <div className="text-xs text-slate-500 mb-1">스프레드 (대두유-팜유)</div>
+          <div className="text-xl font-bold text-amber-600 tabular-nums">{fmt(spreadNow)}
+            {spreadChange != null && (
+              <span className={`text-xs font-medium ml-1.5 ${spreadChange >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                {spreadChange >= 0 ? '▲' : '▼'}{Math.abs(Math.round(spreadChange))}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-xs text-slate-500 mb-1">기준일</div>
+          <div className="text-base font-semibold text-slate-700 tabular-nums">{latest?.date ?? '—'}</div>
+        </div>
+      </div>
+
+      {chartData.length >= 2 && (
+        <div className="card p-4">
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+              <YAxis yAxisId="price" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+              <YAxis yAxisId="spread" orientation="right" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+              <Tooltip />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar yAxisId="spread" dataKey="스프레드" fill="#fde68a" />
+              <Line yAxisId="price" type="monotone" dataKey="팜유" stroke="#d97706" strokeWidth={2} dot={false} />
+              <Line yAxisId="price" type="monotone" dataKey="대두유" stroke="#2563eb" strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div className="card p-3 bg-amber-50/40 border-amber-100 mt-3">
+        <div className="flex items-start gap-2">
+          <span className="text-base">💡</span>
+          <p className="text-xs text-slate-700 leading-relaxed">{signal}</p>
+        </div>
+      </div>
     </div>
   );
 };
@@ -1276,6 +1381,30 @@ const FCPOTab = () => {
   const [bmdTextPreview, setBmdTextPreview] = useState<any>(null);
   const [bmdTextSaving, setBmdTextSaving] = useState(false);
   const [bmdTextMessage, setBmdTextMessage] = useState('');
+
+  // 대두유/식물유 가격 입력
+  const [showSbo, setShowSbo] = useState(false);
+  const [sboDate, setSboDate] = useState('');
+  const [sboPrice, setSboPrice] = useState('');
+  const [sboUnit, setSboUnit] = useState<'cents/lb' | 'USD/MT'>('cents/lb');
+  const [sboCommodity, setSboCommodity] = useState('SBO');
+  const [sboMsg, setSboMsg] = useState('');
+  const [sboSaving, setSboSaving] = useState(false);
+
+  const handleSboSave = async () => {
+    if (!sboDate || !sboPrice) return;
+    setSboSaving(true); setSboMsg('');
+    try {
+      const res = await fetch('/api/oil-prices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: sboDate, commodity: sboCommodity, price_native: parseFloat(sboPrice), unit_native: sboUnit }),
+      });
+      const json = await res.json();
+      if (json.success) { setSboMsg(`저장 완료 ($${Math.round(json.price_usd_mt)}/MT)`); setSboPrice(''); }
+      else setSboMsg(`실패: ${json.error}`);
+    } catch (e: any) { setSboMsg(`오류: ${e.message}`); }
+    finally { setSboSaving(false); }
+  };
 
   // BMD PDF upload state
   const [bmdUploading, setBmdUploading] = useState(false);
@@ -1536,6 +1665,15 @@ const FCPOTab = () => {
             >
               {showBmdText ? '취소' : '+ BMD 텍스트 일괄'}
             </button>
+            <button
+              onClick={() => { setShowSbo(!showSbo); setSboMsg(''); if (!sboDate) setSboDate(new Date().toISOString().slice(0, 10)); }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
+                showSbo ? 'bg-slate-200 text-slate-700' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
+              title="대두유 등 경쟁 식물유 가격 입력 (팜유 스프레드 자동 계산)"
+            >
+              {showSbo ? '취소' : '+ 대두유 가격'}
+            </button>
             </>
             )}
             <button onClick={fetchFCPOData} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors">
@@ -1543,6 +1681,46 @@ const FCPOTab = () => {
             </button>
           </div>
         </div>
+
+        {/* 대두유/식물유 가격 입력 */}
+        {showSbo && (
+          <div className="mb-4 p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 space-y-3 animate-fade-in">
+            <p className="text-sm font-semibold text-slate-700">대두유 · 식물유 가격 입력</p>
+            <p className="text-xs text-slate-500">KoreaPDS 등에서 본 대두유(CBOT) 종가를 입력하면 대시보드에 팜유-대두유 스프레드가 자동 계산됩니다.</p>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">날짜 *</label>
+                <input type="date" value={sboDate} onChange={e => setSboDate(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">품목</label>
+                <select value={sboCommodity} onChange={e => setSboCommodity(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                  <option value="SBO">대두유 (CBOT)</option>
+                  <option value="SUN">해바라기유</option>
+                  <option value="RAPE">유채유</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">가격 *</label>
+                <input type="number" step="0.01" placeholder="74.28" value={sboPrice} onChange={e => setSboPrice(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">단위</label>
+                <select value={sboUnit} onChange={e => setSboUnit(e.target.value as any)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                  <option value="cents/lb">¢/lb (CBOT)</option>
+                  <option value="USD/MT">USD/MT</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button onClick={handleSboSave} disabled={sboSaving || !sboDate || !sboPrice} className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors">
+                  {sboSaving ? '저장 중...' : '저장'}
+                </button>
+              </div>
+            </div>
+            {sboMsg && <span className={`text-xs px-3 py-1.5 rounded-full ${sboMsg.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{sboMsg}</span>}
+            <p className="text-[11px] text-slate-400">예: 대두유 CBOT 74.28¢/lb → ${'{'}74.28 × 22.05{'}'} ≈ $1,638/MT 자동 환산</p>
+          </div>
+        )}
 
         {/* Manual Price Input Form */}
         {showAddForm && (
