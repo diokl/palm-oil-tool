@@ -5169,6 +5169,28 @@ const AdminTab = () => {
   );
 };
 
+// ============ NAV ICON (Tabler-style outline SVG) ============
+const NavIcon = ({ name, className = 'w-[18px] h-[18px]' }: { name: string; className?: string }) => {
+  const paths: Record<string, React.ReactNode> = {
+    dashboard: <><path d="M4 4h6v8H4z" /><path d="M4 16h6v4H4z" /><path d="M14 12h6v8h-6z" /><path d="M14 4h6v4h-6z" /></>,
+    'trending-up': <><path d="M3 17l6-6l4 4l8-8" /><path d="M14 7h7v7" /></>,
+    ruler: <><path d="M5 4h14a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-14a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1z" /><path d="M4 8l2 0M8 4l0 2M12 8l0 -2M16 8l2 0M8 11l0 -2" /></>,
+    bank: <><path d="M3 21l18 0" /><path d="M3 10l18 0" /><path d="M5 6l7 -3l7 3" /><path d="M4 10l0 11M20 10l0 11M8 14l0 3M12 14l0 3M16 14l0 3" /></>,
+    news: <><path d="M16 6h3a1 1 0 0 1 1 1v11a2 2 0 0 1 -4 0v-13a1 1 0 0 0 -1 -1h-10a1 1 0 0 0 -1 1v12a3 3 0 0 0 3 3h11" /><path d="M8 8l4 0M8 12l4 0M8 16l4 0" /></>,
+    cash: <><path d="M7 9m0 2a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2z" /><path d="M14 14m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M17 9v-2a2 2 0 0 0 -2 -2h-10a2 2 0 0 0 -2 2v6a2 2 0 0 0 2 2h2" /></>,
+    package: <><path d="M12 3l8 4.5l0 9l-8 4.5l-8 -4.5l0 -9l8 -4.5" /><path d="M12 12l8 -4.5M12 12l0 9M12 12l-8 -4.5" /></>,
+    'file-text': <><path d="M14 3v4a1 1 0 0 0 1 1h4" /><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" /><path d="M9 9l1 0M9 13l6 0M9 17l6 0" /></>,
+    'file-check': <><path d="M14 3v4a1 1 0 0 0 1 1h4" /><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" /><path d="M9 15l2 2l4 -4" /></>,
+    bell: <><path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6" /><path d="M9 17v1a3 3 0 0 0 6 0v-1" /></>,
+    settings: <><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z" /><path d="M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" /></>,
+  };
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths[name] || paths.dashboard}
+    </svg>
+  );
+};
+
 // ============ MAIN COMPONENT ============
 
 export default function Home() {
@@ -5225,19 +5247,31 @@ export default function Home() {
     }
   };
 
-  const navItems: { id: Tab; label: string; icon: string; masterOnly?: boolean }[] = [
-    { id: 'dashboard', label: '대시보드', icon: '📊' },
-    { id: 'fcpo', label: 'FCPO 가격', icon: '📈' },
-    { id: 'inventory', label: '재고 관리', icon: '📦' },
-    { id: 'box-range', label: '박스권 분석', icon: '📏' },
-    { id: 'purchases', label: '구매 이력', icon: '💰' },
-    { id: 'news', label: '뉴스', icon: '📰' },
-    { id: 'alerts', label: '알림', icon: '🔔' },
-    { id: 'mpob', label: 'MPOB', icon: '🏛️' },
-    { id: 'lc', label: 'LC 개설', icon: '📄' },
-    { id: 'doc-verify', label: '서류 검증', icon: '✅' },
-    { id: 'admin', label: '관리자', icon: '⚙️', masterOnly: true },
+  type NavItem = { id: Tab; label: string; icon: string; masterOnly?: boolean };
+  const navSections: { title: string | null; divider?: boolean; items: NavItem[] }[] = [
+    { title: null, items: [
+      { id: 'dashboard', label: '대시보드', icon: 'dashboard' },
+    ]},
+    { title: '시황 분석', items: [
+      { id: 'fcpo', label: 'FCPO 가격', icon: 'trending-up' },
+      { id: 'box-range', label: '박스권 분석', icon: 'ruler' },
+      { id: 'mpob', label: 'MPOB 수급', icon: 'bank' },
+      { id: 'news', label: '뉴스', icon: 'news' },
+    ]},
+    { title: '구매 · 재고', items: [
+      { id: 'purchases', label: '구매 이력', icon: 'cash' },
+      { id: 'inventory', label: '재고 관리', icon: 'package' },
+    ]},
+    { title: '무역 실무', items: [
+      { id: 'lc', label: 'LC 개설', icon: 'file-text' },
+      { id: 'doc-verify', label: '서류 검증', icon: 'file-check' },
+    ]},
+    { title: null, divider: true, items: [
+      { id: 'alerts', label: '알림', icon: 'bell' },
+      { id: 'admin', label: '관리자', icon: 'settings', masterOnly: true },
+    ]},
   ];
+  const allNavItems: NavItem[] = navSections.flatMap(s => s.items);
 
   const alertCount = dashboardData?.alerts?.filter(a => a.alert_level !== 'normal').length || 0;
 
@@ -5264,27 +5298,42 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {navItems.filter(item => !item.masterOnly || userRole === 'master').map((item) => (
-            <button
-              key={item.id}
-              onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 ${
-                activeTab === item.id
-                  ? 'bg-blue-50 text-blue-700'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <span className="text-base">{item.icon}</span>
-              <span className="text-sm font-medium">{item.label}</span>
-              {item.id === 'alerts' && alertCount > 0 && (
-                <span className="ml-auto text-[10px] font-bold text-white bg-rose-500 px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                  {alertCount}
-                </span>
-              )}
-            </button>
-          ))}
+        {/* Navigation — 섹션 그룹 + 왼쪽 액센트바 */}
+        <nav className="flex-1 px-3 py-3 overflow-y-auto">
+          {navSections.map((section, si) => {
+            const visible = section.items.filter(item => !item.masterOnly || userRole === 'master');
+            if (visible.length === 0) return null;
+            return (
+              <div key={si} className={section.divider ? 'mt-3 pt-3 border-t border-slate-100' : si > 0 ? 'mt-4' : ''}>
+                {section.title && (
+                  <p className="px-3 mb-1 text-[10px] font-semibold tracking-wider text-slate-400 uppercase">{section.title}</p>
+                )}
+                <div className="space-y-0.5">
+                  {visible.map((item) => {
+                    const active = activeTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }}
+                        className={`relative w-full flex items-center gap-3 pl-3 pr-3 py-2 rounded-lg transition-all duration-150 ${
+                          active ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-blue-600 rounded-r-full" />}
+                        <NavIcon name={item.icon} className={`w-[18px] h-[18px] ${active ? 'text-blue-600' : 'text-slate-400'}`} />
+                        <span className="text-sm">{item.label}</span>
+                        {item.id === 'alerts' && alertCount > 0 && (
+                          <span className="ml-auto text-[10px] font-bold text-white bg-rose-500 px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                            {alertCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </nav>
 
         {/* Bottom */}
@@ -5335,10 +5384,18 @@ export default function Home() {
               </svg>
             </button>
             <div>
-              <h2 className="text-xl font-bold text-slate-800">
-                {navItems.find((item) => item.id === activeTab)?.label}
-              </h2>
-              <p className="text-slate-400 text-xs mt-0.5">팜유 수급 관리 시스템</p>
+              {(() => {
+                const sec = navSections.find(s => s.items.some(i => i.id === activeTab));
+                return (
+                  <>
+                    <h2 className="text-xl font-bold text-slate-800">
+                      {sec?.title && <span className="text-slate-400 font-medium">{sec.title} › </span>}
+                      {allNavItems.find((item) => item.id === activeTab)?.label}
+                    </h2>
+                    <p className="text-slate-400 text-xs mt-0.5">팜유 수급 관리 시스템</p>
+                  </>
+                );
+              })()}
             </div>
             <button
               onClick={handleHeaderRefresh}
