@@ -2788,21 +2788,43 @@ const PurchasesTab = () => {
   const handlePdfBulkSave = async () => {
     if (pdfRecords.length === 0) return;
     setBulkLoading(true); setBulkMsg(null);
-    let saved = 0, fail = 0;
+    let saved = 0, skipped = 0, errored = 0;
+    const errMsgs: string[] = [];
     for (const r of pdfRecords) {
-      if (!r.product || !r.shipment_month || !r.unit_price || !r.qty_mt) { fail++; continue; }
+      if (!r.product || !r.shipment_month || !r.unit_price || !r.qty_mt) { skipped++; continue; }
+      // 계약일을 notes 에 합쳐 보존 (purchases 에 contract_date 컬럼 없음)
+      const notes = [r.notes, r.contract_date ? `계약일:${r.contract_date}` : '', r.payment_terms ? `결제:${r.payment_terms}` : '']
+        .filter(Boolean).join(' | ');
+      const payload = {
+        order_no: r.contract_number ? `SC-${r.contract_number}` : null,
+        product: r.product,
+        shipment_month: r.shipment_month,
+        supplier: r.supplier,
+        unit_price: Number(r.unit_price),
+        qty_mt: Number(r.qty_mt),
+        amount_usd: r.amount_usd ?? Number(r.unit_price) * Number(r.qty_mt),
+        incoterms: r.incoterms,
+        contract_number: r.contract_number,
+        notes,
+      };
       try {
         const res = await fetch('/api/purchases', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(r),
+          body: JSON.stringify(payload),
         });
-        if (res.ok) saved++; else fail++;
-      } catch { fail++; }
+        if (res.ok) { saved++; }
+        else { errored++; const j = await res.json().catch(() => ({})); errMsgs.push(`${r.source_file}: ${j.error || res.status}`); }
+      } catch (e: any) { errored++; errMsgs.push(`${r.source_file}: ${e.message}`); }
     }
-    setBulkMsg(`${saved}건 저장 완료${fail > 0 ? `, ${fail}건 실패(필수값 누락)` : ''}!`);
-    setPdfRecords([]);
-    if (saved > 0) { fetchRaw(); fetchPrebuy(); }
+    const parts = [`${saved}건 저장 완료`];
+    if (skipped) parts.push(`${skipped}건 필수값 누락 제외`);
+    if (errored) parts.push(`${errored}건 오류`);
+    setBulkMsg(parts.join(', ') + (errMsgs.length ? ` — ${errMsgs[0]}` : '') + '!');
+    if (saved > 0) {
+      setPdfRecords(prev => prev.filter(r => !r.product || !r.shipment_month || !r.unit_price || !r.qty_mt)); // 저장된 건 제거, 누락건만 남김
+      fetchRaw(); fetchPrebuy();
+    }
     setBulkLoading(false);
   };
 
