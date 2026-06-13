@@ -1106,9 +1106,10 @@ const OilSpreadWidget = ({ data, onNavigate }: {
   const spreadPrev = prev?.spread ?? null;
   const spreadChange = (spreadNow != null && spreadPrev != null) ? spreadNow - spreadPrev : null;
 
-  // 차트용 데이터 (최근 30일)
-  const chartData = series.slice(-30).map(p => ({
-    date: p.date?.slice(5) ?? '',
+  // 차트용 데이터 (2025·2026 통합 날짜축, 최근 120포인트). 팜유·대두유는
+  // 날짜가 안 맞아도 각자 있는 곳에 표시(점으로). 스프레드는 대두유 있는 날만.
+  const chartData = series.slice(-120).map(p => ({
+    date: p.date ?? '',
     팜유: p.palm,
     대두유: p.sbo,
     스프레드: p.spread,
@@ -1133,7 +1134,7 @@ const OilSpreadWidget = ({ data, onNavigate }: {
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
         <div className="card p-4">
-          <div className="text-xs text-slate-500 mb-1" title="FCPO 최근월 종가, MYR은 USD/MYR 환율로 자동 환산">팜유 (FCPO 최근월)</div>
+          <div className="text-xs text-slate-500 mb-1" title="MYPO RBD PALM OIL ASK(USD/MT) 최근월. 대두유 날짜에 맞춰 as-of 매칭">팜유 (FCPO 최근월)</div>
           <div className="text-xl font-bold text-slate-800 tabular-nums">{fmt(latest?.palm)}<span className="text-xs font-normal text-slate-400 ml-1">/MT</span></div>
         </div>
         <div className="card p-4">
@@ -1167,8 +1168,8 @@ const OilSpreadWidget = ({ data, onNavigate }: {
               <Tooltip />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar yAxisId="spread" dataKey="스프레드" fill="#fde68a" />
-              <Line yAxisId="price" type="monotone" dataKey="팜유" stroke="#d97706" strokeWidth={2} dot={false} />
-              <Line yAxisId="price" type="monotone" dataKey="대두유" stroke="#2563eb" strokeWidth={2} dot={false} />
+              <Line yAxisId="price" type="monotone" dataKey="팜유" stroke="#d97706" strokeWidth={2} dot={{ r: 2 }} connectNulls />
+              <Line yAxisId="price" type="monotone" dataKey="대두유" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} connectNulls />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
