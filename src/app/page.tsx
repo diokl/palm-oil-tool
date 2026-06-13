@@ -3811,6 +3811,10 @@ const NewsTab = () => {
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkResults, setBulkResults] = useState<any[] | null>(null);
 
+  // One-click import (clipboard)
+  const [oneClickLoading, setOneClickLoading] = useState(false);
+  const [oneClickMsg, setOneClickMsg] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null);
+
   // Detail/Delete
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
@@ -3955,6 +3959,51 @@ const NewsTab = () => {
     }
   };
 
+  // 원클릭 가져오기 — 클립보드의 시황 페이지 내용을 읽어 AI가 기사 단위로 파싱·저장.
+  // KoreaPDS 등에서 본인이 보던 페이지를 Ctrl+A → Ctrl+C 한 뒤 버튼 한 번이면 됨.
+  // (본인 열람의 연장이므로 ToS 안전, 자동 반복 크롤링 아님)
+  const handleOneClickImport = async () => {
+    setOneClickMsg(null);
+    let clip = '';
+    try {
+      clip = await navigator.clipboard.readText();
+    } catch {
+      // 클립보드 권한 거부 / 비-HTTPS / 포커스 없음 → 수동 붙여넣기로 폴백
+      setShowBulkForm(true);
+      setShowAddForm(false);
+      setOneClickMsg({ type: 'info', text: '클립보드를 읽을 수 없어요. 아래 칸에 붙여넣기(Ctrl+V) 후 업로드하세요.' });
+      return;
+    }
+
+    if (!clip || clip.trim().length < 20) {
+      setShowBulkForm(true);
+      setOneClickMsg({ type: 'err', text: '클립보드가 비어있거나 너무 짧습니다. 시황 페이지를 전체선택(Ctrl+A) → 복사(Ctrl+C) 후 다시 누르세요.' });
+      return;
+    }
+
+    setOneClickLoading(true);
+    try {
+      const res = await fetch('/api/news', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bulk_text: clip }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setOneClickMsg({ type: 'ok', text: `클립보드에서 ${json.count ?? json.results?.length ?? 0}건 가져와 저장했습니다.` });
+        setShowBulkForm(false);
+        fetchNews();
+        setTimeout(() => setOneClickMsg(null), 6000);
+      } else {
+        setOneClickMsg({ type: 'err', text: `가져오기 실패: ${json.error || '알 수 없는 오류'}` });
+      }
+    } catch (err: any) {
+      setOneClickMsg({ type: 'err', text: `가져오기 중 오류: ${err.message || err}` });
+    } finally {
+      setOneClickLoading(false);
+    }
+  };
+
   const sentimentCounts = sentimentSummary
     ? {
         강세: sentimentSummary.find((s: any) => s.sentiment === '강세')?.cnt || 0,
@@ -3984,6 +4033,16 @@ const NewsTab = () => {
         {canWrite && (
         <div className="flex flex-col gap-2">
           <button
+            onClick={handleOneClickImport}
+            disabled={oneClickLoading}
+            title="시황 페이지(KoreaPDS 등)에서 Ctrl+A → Ctrl+C 한 뒤 누르면, 클립보드 내용을 AI가 기사별로 분리·분석해 저장합니다"
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm whitespace-nowrap bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {oneClickLoading ? (
+              <><svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>가져오는 중...</>
+            ) : '📋 원클릭 가져오기'}
+          </button>
+          <button
             onClick={() => { setShowAddForm(!showAddForm); setShowBulkForm(false); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm whitespace-nowrap ${
               showAddForm ? 'bg-slate-200 text-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'
@@ -4002,6 +4061,24 @@ const NewsTab = () => {
         </div>
         )}
       </div>
+
+      {/* 원클릭 가져오기 결과/안내 */}
+      {oneClickMsg && (
+        <div className={`px-4 py-2.5 rounded-lg text-sm animate-fade-in border ${
+          oneClickMsg.type === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+          oneClickMsg.type === 'err' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+          'bg-blue-50 text-blue-700 border-blue-200'
+        }`}>
+          {oneClickMsg.text}
+        </div>
+      )}
+
+      {/* 원클릭 사용법 (canWrite 사용자에게만) */}
+      {canWrite && (
+        <p className="text-xs text-slate-400 -mt-2">
+          💡 <span className="font-medium text-violet-500">원클릭 가져오기</span> = KoreaPDS 등 시황 페이지에서 <b>Ctrl+A → Ctrl+C</b> 한 뒤 버튼을 누르면 끝. AI가 기사 분리·날짜·시황/영향도를 자동 분석합니다. (본인 열람의 연장이라 안전 — 자동 반복 크롤링 아님)
+        </p>
+      )}
 
       {/* Single News Add Form — AI 자동 판단 */}
       {showAddForm && (
@@ -4687,6 +4764,7 @@ const MPOBTab = () => {
   const [data, setData] = useState<Record<string, MpobRow[]>>({});
   const [loading, setLoading] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [editCell, setEditCell] = useState<{ cat: string; item: string; month: number; field: 'value' | 'value_rm' } | null>(null);
   const [editValue, setEditValue] = useState('');
   const editRef = useRef<HTMLInputElement>(null);
@@ -4776,6 +4854,25 @@ const MPOBTab = () => {
       alert('Seed 실패 — 먼저 Supabase에서 mpob_data 테이블을 생성해주세요.');
     } finally {
       setSeeding(false);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/mpob/sync', { method: 'POST' });
+      const json = await res.json();
+      if (json.error) {
+        alert(`MPOB 자동 동기화 실패: ${json.error}`);
+      } else {
+        alert(json.message || `동기화 완료: ${json.count}건`);
+        fetchData();
+        fetchYears();
+      }
+    } catch (err) {
+      alert('MPOB 자동 동기화 실패 — 네트워크 또는 MPOB 로그인 정보를 확인하세요.');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -5030,6 +5127,9 @@ const MPOBTab = () => {
         </div>
         {canWrite && (
         <div className="flex gap-2">
+          <button onClick={handleSync} disabled={syncing} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50" title="MPOB BEPI에 로그인해 재고·생산·수출(항구/품목) 최신 수치를 자동으로 가져옵니다">
+            {syncing ? 'MPOB 가져오는 중...' : '🔄 MPOB 자동 가져오기'}
+          </button>
           <button onClick={() => setBulkOpen(true)} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">
             Bulk 붙여넣기
           </button>
