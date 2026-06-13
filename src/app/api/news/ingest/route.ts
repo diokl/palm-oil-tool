@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbGet, dbRun } from '@/lib/db';
+import { dbAll, dbRun } from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
 
 // 북마클릿(KoreaPDS 등 본인 로그인 세션)에서 수집한 기사들을 받아 중복을 거르고 저장.
@@ -93,23 +93,34 @@ export async function POST(request: NextRequest) {
     }
 
     let added = 0;
-    let skipped = 0;
-    const results: Array<{ date: string; title: string; status: 'added' | 'skipped'; sentiment?: string; impact?: string }> = [];
+    let updated = 0;
+    const results: Array<{ date: string; title: string; status: 'added' | 'updated'; sentiment?: string; impact?: string }> = [];
+
+    // 제목 정규화: 앞의 "[06/12] " 같은 날짜접두어 제거 → 옛 bulk_upload건과 매칭용
+    const stripPrefix = (t: string) => (t || '').replace(/^\[[^\]]*\]\s*/, '').trim();
 
     for (const a of articles) {
       const date = normalizeDate(a.date || '');
       const title = (a.title || '').trim();
       const full = (a.content || '').trim();
       if (!date || !title) { continue; }
+      const normT = stripPrefix(title);
 
-      // 중복: 같은 날짜 + 같은 제목 + 같은 카테고리가 이미 있으면 스킵
-      const dup = await dbGet(
-        `SELECT 1 AS x FROM news WHERE date = ? AND content = ? AND COALESCE(category,'') = ? LIMIT 1`,
-        [date, title, category],
-      );
-      if (dup) {
-        skipped++;
-        results.push({ date, title, status: 'skipped' });
+      // 같은 날짜의 기존 뉴스 중, 접두어 무시 제목이 같은 항목 찾기(소스 무관 중복 방지)
+      const existing = await dbAll(
+        `SELECT id, content, sentiment FROM news WHERE date = ?`,
+        [date],
+      ) as { id: number; content: string; sentiment: string | null }[];
+      const match = existing.find((e) => stripPrefix(e.content) === normT);
+
+      if (match) {
+        // 기존 항목 갱신: 제목 통일 + 본문 정리 + 카테고리 부여. 시황은 기존 유지(있으면).
+        await dbRun(
+          `UPDATE news SET content = ?, full_content = COALESCE(?, full_content), category = ? WHERE id = ?`,
+          [title, full || null, category, match.id],
+        );
+        updated++;
+        results.push({ date, title, status: 'updated' });
         continue;
       }
 
@@ -123,7 +134,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { success: true, added, skipped, total: articles.length, results },
+      { success: true, added, updated, total: articles.length, results },
       { headers: CORS },
     );
   } catch (error: any) {
