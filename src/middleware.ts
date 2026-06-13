@@ -9,6 +9,7 @@ const PUBLIC_PATHS = [
   '/api/auth/logout',
   '/api/auth/check',
   '/api/auth/register',
+  '/api/news/ingest', // 북마클릿 크로스오리진 인제스트 — 자체 토큰 인증 + CORS
   '/_next',
   '/favicon.ico',
 ];
