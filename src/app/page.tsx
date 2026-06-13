@@ -10,7 +10,7 @@ import {
 const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrite: false, role: 'user' });
 const useAuth = () => useContext(AuthContext);
 
-type Tab = 'dashboard' | 'fcpo' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin';
+type Tab = 'dashboard' | 'fcpo' | 'soybean' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin';
 type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026' | 'managed2026';
 
 const INVENTORY_SUB_TABS: { id: InventorySubTab; label: string; product: 'RBD' | 'RSPO' | 'MANAGED'; year: number }[] = [
@@ -1383,30 +1383,6 @@ const FCPOTab = () => {
   const [bmdTextSaving, setBmdTextSaving] = useState(false);
   const [bmdTextMessage, setBmdTextMessage] = useState('');
 
-  // 대두유/식물유 가격 입력
-  const [showSbo, setShowSbo] = useState(false);
-  const [sboDate, setSboDate] = useState('');
-  const [sboPrice, setSboPrice] = useState('');
-  const [sboUnit, setSboUnit] = useState<'cents/lb' | 'USD/MT'>('cents/lb');
-  const [sboCommodity, setSboCommodity] = useState('SBO');
-  const [sboMsg, setSboMsg] = useState('');
-  const [sboSaving, setSboSaving] = useState(false);
-
-  const handleSboSave = async () => {
-    if (!sboDate || !sboPrice) return;
-    setSboSaving(true); setSboMsg('');
-    try {
-      const res = await fetch('/api/oil-prices', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: sboDate, commodity: sboCommodity, price_native: parseFloat(sboPrice), unit_native: sboUnit }),
-      });
-      const json = await res.json();
-      if (json.success) { setSboMsg(`저장 완료 ($${Math.round(json.price_usd_mt)}/MT)`); setSboPrice(''); }
-      else setSboMsg(`실패: ${json.error}`);
-    } catch (e: any) { setSboMsg(`오류: ${e.message}`); }
-    finally { setSboSaving(false); }
-  };
-
   // BMD PDF upload state
   const [bmdUploading, setBmdUploading] = useState(false);
   const [bmdResult, setBmdResult] = useState<any>(null);
@@ -1666,15 +1642,6 @@ const FCPOTab = () => {
             >
               {showBmdText ? '취소' : '+ BMD 텍스트 일괄'}
             </button>
-            <button
-              onClick={() => { setShowSbo(!showSbo); setSboMsg(''); if (!sboDate) setSboDate(new Date().toISOString().slice(0, 10)); }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
-                showSbo ? 'bg-slate-200 text-slate-700' : 'bg-indigo-600 text-white hover:bg-indigo-700'
-              }`}
-              title="대두유 등 경쟁 식물유 가격 입력 (팜유 스프레드 자동 계산)"
-            >
-              {showSbo ? '취소' : '+ 대두유 가격'}
-            </button>
             </>
             )}
             <button onClick={fetchFCPOData} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors">
@@ -1682,46 +1649,6 @@ const FCPOTab = () => {
             </button>
           </div>
         </div>
-
-        {/* 대두유/식물유 가격 입력 */}
-        {showSbo && (
-          <div className="mb-4 p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 space-y-3 animate-fade-in">
-            <p className="text-sm font-semibold text-slate-700">대두유 · 식물유 가격 입력</p>
-            <p className="text-xs text-slate-500">KoreaPDS 등에서 본 대두유(CBOT) 종가를 입력하면 대시보드에 팜유-대두유 스프레드가 자동 계산됩니다.</p>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">날짜 *</label>
-                <input type="date" value={sboDate} onChange={e => setSboDate(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">품목</label>
-                <select value={sboCommodity} onChange={e => setSboCommodity(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                  <option value="SBO">대두유 (CBOT)</option>
-                  <option value="SUN">해바라기유</option>
-                  <option value="RAPE">유채유</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">가격 *</label>
-                <input type="number" step="0.01" placeholder="74.28" value={sboPrice} onChange={e => setSboPrice(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">단위</label>
-                <select value={sboUnit} onChange={e => setSboUnit(e.target.value as any)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                  <option value="cents/lb">¢/lb (CBOT)</option>
-                  <option value="USD/MT">USD/MT</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <button onClick={handleSboSave} disabled={sboSaving || !sboDate || !sboPrice} className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors">
-                  {sboSaving ? '저장 중...' : '저장'}
-                </button>
-              </div>
-            </div>
-            {sboMsg && <span className={`text-xs px-3 py-1.5 rounded-full ${sboMsg.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{sboMsg}</span>}
-            <p className="text-[11px] text-slate-400">예: 대두유 CBOT 74.28¢/lb → ${'{'}74.28 × 22.05{'}'} ≈ $1,638/MT 자동 환산</p>
-          </div>
-        )}
 
         {/* Manual Price Input Form */}
         {showAddForm && (
@@ -3794,6 +3721,173 @@ const PurchasesTab = () => {
   );
 };
 
+// ============ 대두유(SBO) 탭 — FCPO와 분리된 식물유 가격 관리 ============
+const SoybeanTab = () => {
+  const { canWrite } = useAuth();
+  const [prices, setPrices] = useState<any[]>([]);
+  const [spread, setSpread] = useState<{ latest: any; prev: any } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ t: 'ok' | 'err'; m: string } | null>(null);
+  const [date, setDate] = useState('');
+  const [price, setPrice] = useState('');
+  const [unit, setUnit] = useState<'cents/lb' | 'USD/MT'>('cents/lb');
+  const [showBulk, setShowBulk] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const csvRef = useRef<HTMLInputElement>(null);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/oil-prices');
+      const j = await res.json();
+      setPrices((j.prices || []).filter((p: any) => p.commodity === 'SBO'));
+      setSpread({ latest: j.latest, prev: j.prev });
+    } catch (e) { /* noop */ } finally { setLoading(false); }
+  };
+  useEffect(() => { fetchData(); }, []);
+
+  const flash = (t: 'ok' | 'err', m: string) => { setMsg({ t, m }); setTimeout(() => setMsg(null), 5000); };
+
+  const handleSingle = async () => {
+    if (!date || !price) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/oil-prices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, commodity: 'SBO', price_native: parseFloat(price), unit_native: unit }),
+      });
+      const j = await res.json();
+      if (j.success) { flash('ok', `저장 완료 ($${Math.round(j.price_usd_mt)}/MT)`); setPrice(''); fetchData(); }
+      else flash('err', j.error || '실패');
+    } catch (e: any) { flash('err', e.message); } finally { setBusy(false); }
+  };
+
+  const postBulk = async (text: string, label: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/oil-prices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'bulk', commodity: 'SBO', unit_native: 'cents/lb', text }),
+      });
+      const j = await res.json();
+      if (j.success) { flash('ok', `${label}: ${j.applied}건 저장됨`); setBulkText(''); setShowBulk(false); fetchData(); }
+      else flash('err', j.error || '실패');
+    } catch (e: any) { flash('err', e.message); } finally { setBusy(false); }
+  };
+
+  // KoreaPDS CSV(EUC-KR, "날짜,가격,..." 형식) 업로드
+  const handleCsv = async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      let text = '';
+      try { text = new TextDecoder('euc-kr').decode(buf); } catch { text = new TextDecoder('utf-8').decode(buf); }
+      const out: string[] = [];
+      for (const line of text.split(/\r?\n/)) {
+        const m = line.match(/(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*,\s*([\d.]+)/);
+        if (m) out.push(`${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')} ${m[4]}`);
+      }
+      if (!out.length) { flash('err', 'CSV에서 날짜/가격을 찾지 못했습니다 (KoreaPDS 형식 확인)'); return; }
+      await postBulk(out.join('\n'), `CSV 업로드 (${file.name})`);
+    } catch (e: any) { flash('err', `CSV 처리 오류: ${e.message}`); }
+  };
+
+  const handleDelete = async (id: number) => {
+    try { await fetch(`/api/oil-prices?id=${id}`, { method: 'DELETE' }); fetchData(); } catch (e) { /* noop */ }
+  };
+
+  const fmt = (n: number | null | undefined) => n == null ? '—' : `$${Math.round(n).toLocaleString()}`;
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-800">대두유 (CBOT)</h2>
+          <p className="text-xs text-slate-500 mt-0.5">경쟁 식물유 가격. 팜유(FCPO)와 분리 관리 — 입력하면 대시보드 스프레드에 자동 반영.</p>
+        </div>
+        {canWrite && (
+          <div className="flex gap-2">
+            <input ref={csvRef} type="file" accept=".csv" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleCsv(f); e.target.value = ''; }} />
+            <button onClick={() => csvRef.current?.click()} disabled={busy}
+              className="px-3 py-1.5 text-xs bg-violet-600 text-white rounded-lg hover:bg-violet-700 font-medium disabled:opacity-50">
+              {busy ? '처리 중...' : '📄 KoreaPDS CSV 업로드'}
+            </button>
+            <button onClick={() => setShowBulk(v => !v)}
+              className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">
+              {showBulk ? '닫기' : '대량 붙여넣기'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {msg && (
+        <div className={`px-4 py-2.5 rounded-lg text-sm border ${msg.t === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>{msg.m}</div>
+      )}
+
+      {/* 스프레드 요약 */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="card p-4"><div className="text-xs text-slate-500 mb-1">최신 대두유</div><div className="text-xl font-bold text-blue-700 tabular-nums">{fmt(spread?.latest?.sbo)}<span className="text-xs font-normal text-slate-400 ml-1">/MT</span></div></div>
+        <div className="card p-4"><div className="text-xs text-slate-500 mb-1">팜유 (FCPO)</div><div className="text-xl font-bold text-amber-700 tabular-nums">{fmt(spread?.latest?.palm)}<span className="text-xs font-normal text-slate-400 ml-1">/MT</span></div></div>
+        <div className="card p-4"><div className="text-xs text-slate-500 mb-1">스프레드 (대두유-팜유)</div><div className="text-xl font-bold text-slate-800 tabular-nums">{fmt(spread?.latest?.spread)}</div></div>
+      </div>
+
+      {/* 단건 입력 */}
+      {canWrite && (
+        <div className="card p-4 flex flex-wrap items-end gap-3">
+          <div><label className="text-xs text-slate-500 mb-1 block">날짜</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm" /></div>
+          <div><label className="text-xs text-slate-500 mb-1 block">가격</label><input type="text" value={price} onChange={e => setPrice(e.target.value)} placeholder="74.28" className="px-3 py-2 border border-slate-200 rounded-lg text-sm w-28" /></div>
+          <div><label className="text-xs text-slate-500 mb-1 block">단위</label>
+            <select value={unit} onChange={e => setUnit(e.target.value as any)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm">
+              <option value="cents/lb">¢/lb</option><option value="USD/MT">USD/MT</option>
+            </select>
+          </div>
+          <button onClick={handleSingle} disabled={busy || !date || !price} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40">저장</button>
+          <span className="text-[11px] text-slate-400 self-center">¢/lb는 ×22.05로 USD/MT 자동 환산</span>
+        </div>
+      )}
+
+      {/* 대량 붙여넣기 */}
+      {showBulk && canWrite && (
+        <div className="card p-4 space-y-2 border-emerald-100 bg-emerald-50/30">
+          <p className="text-xs text-slate-500">한 줄에 "날짜 가격" 또는 "날짜,가격" (¢/lb 기준). 예: 2026-06-12 74.28</p>
+          <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={8} placeholder="2026-06-12 74.28&#10;2026-06-11 74.45 ..." className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono" />
+          <div className="flex justify-end"><button onClick={() => postBulk(bulkText, '대량 입력')} disabled={busy || !bulkText.trim()} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-40">업로드</button></div>
+        </div>
+      )}
+
+      {/* 가격 목록 */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-700">입력된 대두유 가격 <span className="text-xs font-normal text-slate-400">({prices.length}건)</span></p>
+        </div>
+        {loading ? <div className="p-8"><Shimmer className="h-40" /></div> : prices.length === 0 ? (
+          <p className="p-8 text-center text-sm text-slate-400">데이터가 없습니다. CSV 업로드 또는 입력으로 추가하세요.</p>
+        ) : (
+          <div className="max-h-[480px] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 sticky top-0"><tr className="text-xs text-slate-500">
+                <th className="px-4 py-2 text-left font-medium">날짜</th><th className="px-4 py-2 text-right font-medium">가격(원)</th>
+                <th className="px-4 py-2 text-right font-medium">USD/MT</th><th className="px-4 py-2 text-right font-medium"></th>
+              </tr></thead>
+              <tbody>
+                {prices.map((p) => (
+                  <tr key={p.id} className="border-t border-slate-50 hover:bg-slate-50/60">
+                    <td className="px-4 py-1.5 tabular-nums">{p.date}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums text-slate-500">{p.price_native} {p.unit_native?.includes('cent') ? '¢/lb' : ''}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums font-medium">${Math.round(p.price_usd_mt).toLocaleString()}</td>
+                    <td className="px-4 py-1.5 text-right">{canWrite && <button onClick={() => handleDelete(p.id)} className="text-xs text-rose-400 hover:text-rose-600">삭제</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // KoreaPDS 원클릭 북마클릿. String.raw로 정규식 백슬래시(\d, \s, � 등) 보존.
 // 본인 로그인 브라우저 세션에서 목록의 각 기사를 same-origin fetch로 수집 → /api/news/ingest 로 전송.
 const NEWS_BOOKMARKLET = ('java' + 'script:') + String.raw`(async()=>{try{const I='https://palm-oil-tool.vercel.app/api/news/ingest?token=57b7cacfd147c09051db8ac66e26d2e037b3112e91fb6cc7';const nz=s=>{const m=(s||'').match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);return m?m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2):'';};const rows=[...document.querySelectorAll('table tr')].map(tr=>{const a=tr.querySelector('a[href]');if(!a)return null;const d=nz(tr.innerText);const t=(a.textContent||'').trim();if(!d||!t)return null;return{date:d,title:t,url:a.href};}).filter(Boolean);if(!rows.length){alert('뉴스 목록을 못 찾았습니다. KoreaPDS 시황 목록 페이지에서 실행하세요.');return;}const dec=b=>{let h=new TextDecoder('utf-8').decode(b);if(/charset\s*=\s*["']?euc-kr/i.test(h)||(h.match(/�/g)||[]).length>5){try{h=new TextDecoder('euc-kr').decode(b);}catch(e){}}return h;};const gb=doc=>{let best='',n=0;doc.querySelectorAll('td,div,article,section,.view,.board_view,.bbs_view,.content,#content').forEach(el=>{const x=(el.textContent||'').replace(/\s+/g,' ').trim();if(x.length>n&&x.length<20000){n=x.length;best=x;}});return best;};const arts=[];for(const r of rows.slice(0,30)){try{const b=await(await fetch(r.url,{credentials:'include'})).arrayBuffer();const doc=new DOMParser().parseFromString(dec(b),'text/html');arts.push({date:r.date,title:r.title,content:gb(doc)});}catch(e){arts.push({date:r.date,title:r.title,content:''});}await new Promise(z=>setTimeout(z,150));}const res=await fetch(I,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articles:arts})});const j=await res.json();alert(res.ok?('팜유툴 가져오기 완료\n추가 '+j.added+'건 / 중복 스킵 '+j.skipped+'건'):('실패: '+(j.error||res.status)));}catch(e){alert('오류: '+e.message);}})();`;
@@ -5605,6 +5699,7 @@ export default function Home() {
     ]},
     { title: '시황 분석', items: [
       { id: 'fcpo', label: 'FCPO 가격', icon: 'trending-up' },
+      { id: 'soybean', label: '대두유', icon: 'trending-up' },
       { id: 'box-range', label: '박스권 분석', icon: 'ruler' },
       { id: 'mpob', label: 'MPOB 수급', icon: 'bank' },
       { id: 'news', label: '뉴스', icon: 'news' },
@@ -5764,6 +5859,7 @@ export default function Home() {
           {/* Tab Content — key에 refreshTick 포함하여 헤더 새로고침 시 자동 재마운트 (자체 fetch 재실행) */}
           {activeTab === 'dashboard' && <DashboardTab data={dashboardData} loading={loading} onNavigate={setActiveTab} />}
           {activeTab === 'fcpo' && <FCPOTab key={`fcpo-${refreshTick}`} />}
+          {activeTab === 'soybean' && <SoybeanTab key={`sbo-${refreshTick}`} />}
           {activeTab === 'inventory' && <InventoryTab key={`inv-${refreshTick}`} />}
           {activeTab === 'box-range' && <BoxRangeTab key={`br-${refreshTick}`} />}
           {activeTab === 'purchases' && <PurchasesTab key={`pur-${refreshTick}`} />}

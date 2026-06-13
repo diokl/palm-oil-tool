@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbAll, dbRun } from '@/lib/db';
+import { dbAll, dbRun, dbBatchRun } from '@/lib/db';
 import { getOilSpread, toUsdMt } from '@/lib/oil-spread';
 
 // GET /api/oil-prices            → 스프레드 시계열 + 입력 목록
@@ -32,24 +32,28 @@ export async function POST(request: NextRequest) {
       const commodity = body.commodity || 'SBO';
       const unit = body.unit_native || 'cents/lb';
       const lines = body.text.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
-      let applied = 0;
+      // 여러 줄 → upsert ops 빌드 후 배치 실행(수백 행도 타임아웃 없이).
+      const ops: { sql: string; params: any[] }[] = [];
       for (const line of lines) {
-        const m = line.match(/(\d{4}-\d{1,2}-\d{1,2})\s+([\d.]+)/);
+        const m = line.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[,\s]+([\d.]+)/);
         if (!m) continue;
-        const date = `${m[1].slice(0, 4)}-${m[1].slice(5).split('-').map((p: string) => p.padStart(2, '0')).join('-')}`;
-        const native = parseFloat(m[2]);
+        const date = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+        const native = parseFloat(m[4]);
+        if (isNaN(native)) continue;
         const usd = Math.round(toUsdMt(native, unit) * 100) / 100;
-        await dbRun(
-          `INSERT INTO oil_prices (date, commodity, price_native, unit_native, price_usd_mt, source)
-           VALUES (?, ?, ?, ?, ?, 'manual_bulk')
-           ON CONFLICT (date, commodity) DO UPDATE SET
-             price_native = EXCLUDED.price_native, unit_native = EXCLUDED.unit_native,
-             price_usd_mt = EXCLUDED.price_usd_mt, source = EXCLUDED.source`,
-          [date, commodity, native, unit, usd],
-        );
-        applied++;
+        ops.push({
+          sql: `INSERT INTO oil_prices (date, commodity, price_native, unit_native, price_usd_mt, source)
+                VALUES (?, ?, ?, ?, ?, 'manual_bulk')
+                ON CONFLICT (date, commodity) DO UPDATE SET
+                  price_native = EXCLUDED.price_native, unit_native = EXCLUDED.unit_native,
+                  price_usd_mt = EXCLUDED.price_usd_mt, source = EXCLUDED.source`,
+          params: [date, commodity, native, unit, usd],
+        });
       }
-      return NextResponse.json({ success: true, applied });
+      for (let i = 0; i < ops.length; i += 100) {
+        await dbBatchRun(ops.slice(i, i + 100));
+      }
+      return NextResponse.json({ success: true, applied: ops.length });
     }
 
     const { date, commodity, price_native, unit_native } = body;
