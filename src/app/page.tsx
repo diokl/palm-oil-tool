@@ -2577,6 +2577,11 @@ const PurchasesTab = () => {
   const [bulkPreview, setBulkPreview] = useState<any[] | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  const [bulkMode, setBulkMode] = useState<'text' | 'pdf'>('text');
+  const [pdfRecords, setPdfRecords] = useState<any[]>([]);
+  const [pdfParsing, setPdfParsing] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState('');
+  const pdfBulkRef = useRef<HTMLInputElement>(null);
 
   // Prebuy sub-tab & excluded months & period filter
   const [prebuyView, setPrebuyView] = useState<'total' | 'rbd' | 'rspo'>('total');
@@ -2751,6 +2756,60 @@ const PurchasesTab = () => {
     finally { setBulkLoading(false); }
   };
 
+  // PDF 여러 장 파싱 → 미리보기 records 수집
+  const handlePdfBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setPdfParsing(true);
+    setBulkMsg(null);
+    const records: any[] = [];
+    let fail = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setPdfProgress(`(${i + 1}/${files.length}) ${file.name} 분석 중...`);
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch('/api/purchases/upload', { method: 'POST', body: fd });
+        const json = await res.json();
+        if (json.success && json.record) {
+          records.push(json.record);
+        } else { fail++; }
+      } catch { fail++; }
+    }
+    setPdfRecords(prev => [...prev, ...records]);
+    setPdfProgress('');
+    setPdfParsing(false);
+    setBulkMsg(`${records.length}건 파싱 완료${fail > 0 ? `, ${fail}건 실패` : ''}. 확인 후 저장하세요.`);
+    if (pdfBulkRef.current) pdfBulkRef.current.value = '';
+  };
+
+  // PDF 파싱 records 일괄 저장 (각 건 POST /api/purchases)
+  const handlePdfBulkSave = async () => {
+    if (pdfRecords.length === 0) return;
+    setBulkLoading(true); setBulkMsg(null);
+    let saved = 0, fail = 0;
+    for (const r of pdfRecords) {
+      if (!r.product || !r.shipment_month || !r.unit_price || !r.qty_mt) { fail++; continue; }
+      try {
+        const res = await fetch('/api/purchases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(r),
+        });
+        if (res.ok) saved++; else fail++;
+      } catch { fail++; }
+    }
+    setBulkMsg(`${saved}건 저장 완료${fail > 0 ? `, ${fail}건 실패(필수값 누락)` : ''}!`);
+    setPdfRecords([]);
+    if (saved > 0) { fetchRaw(); fetchPrebuy(); }
+    setBulkLoading(false);
+  };
+
+  const updatePdfRecord = (idx: number, field: string, value: any) => {
+    setPdfRecords(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
+  };
+
   // Save market price for a single purchase
   const handlePurchaseMarketPriceSave = async (purchaseId: number) => {
     if (!marketInput) return;
@@ -2854,63 +2913,139 @@ const PurchasesTab = () => {
           {showBulk && (
             <div className="card p-5 border-blue-100 bg-blue-50/30 space-y-4 animate-fade-in">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-700">대량 업로드 (엑셀 붙여넣기)</p>
-                <button onClick={() => { setShowBulk(false); setBulkPreview(null); }} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
-              </div>
-              <p className="text-xs text-slate-500">엑셀에서 데이터 행을 복사하여 아래에 붙여넣기 하세요. 헤더 행은 자동으로 무시됩니다.</p>
-              <textarea
-                value={bulkText}
-                onChange={(e) => { setBulkText(e.target.value); setBulkPreview(null); }}
-                placeholder="엑셀에서 복사한 데이터를 여기에 붙여넣기..."
-                className="w-full h-40 px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-white resize-y"
-              />
-              <div className="flex items-center gap-3">
-                <button onClick={handleBulkPreview} disabled={bulkLoading || !bulkText.trim()} className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 transition-colors">
-                  {bulkLoading ? '파싱 중...' : '미리보기'}
-                </button>
-                {bulkPreview && bulkPreview.length > 0 && (
-                  <button onClick={handleBulkSave} disabled={bulkLoading} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors">
-                    {bulkLoading ? '저장 중...' : `${bulkPreview.length}건 저장`}
-                  </button>
-                )}
-                {bulkMsg && <span className={`text-xs px-3 py-1.5 rounded-full ${bulkMsg.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{bulkMsg}</span>}
+                <p className="text-sm font-semibold text-slate-700">대량 업로드</p>
+                <button onClick={() => { setShowBulk(false); setBulkPreview(null); setPdfRecords([]); }} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
               </div>
 
-              {/* Preview Table */}
-              {bulkPreview && bulkPreview.length > 0 && (
-                <div className="overflow-x-auto max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0">
-                      <tr className="bg-slate-100 border-b border-slate-200">
-                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">No</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">상품</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">선적월</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">공급사</th>
-                        <th className="px-2 py-1.5 text-right font-semibold text-slate-500">단가</th>
-                        <th className="px-2 py-1.5 text-right font-semibold text-slate-500">수량</th>
-                        <th className="px-2 py-1.5 text-right font-semibold text-slate-500">금액</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-slate-500">Incoterms</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {bulkPreview.map((p: any, i: number) => (
-                        <tr key={i} className="hover:bg-slate-50/60">
-                          <td className="px-2 py-1.5 text-slate-400">{p.order_no || i + 1}</td>
-                          <td className="px-2 py-1.5">
-                            <span className={`font-medium px-1.5 py-0.5 rounded ${p.product === 'RBD' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{p.product}</span>
-                          </td>
-                          <td className="px-2 py-1.5 tabular-nums">{p.shipment_month}</td>
-                          <td className="px-2 py-1.5 text-slate-600">{p.supplier || '-'}</td>
-                          <td className="px-2 py-1.5 tabular-nums text-right">${formatNumber(p.unit_price, 1)}</td>
-                          <td className="px-2 py-1.5 tabular-nums text-right">{formatNumber(p.qty_mt, 1)}</td>
-                          <td className="px-2 py-1.5 tabular-nums text-right">${formatNumber(p.amount_usd, 0)}</td>
-                          <td className="px-2 py-1.5 text-slate-500">{p.incoterms || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              {/* 모드 토글 */}
+              <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+                <button onClick={() => setBulkMode('text')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${bulkMode === 'text' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
+                  엑셀 붙여넣기
+                </button>
+                <button onClick={() => setBulkMode('pdf')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${bulkMode === 'pdf' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
+                  PDF 계약서 첨부
+                </button>
+              </div>
+
+              {/* ── 엑셀 텍스트 모드 ── */}
+              {bulkMode === 'text' && (<>
+                <p className="text-xs text-slate-500">엑셀에서 데이터 행을 복사하여 아래에 붙여넣기 하세요. 헤더 행은 자동 무시됩니다.</p>
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => { setBulkText(e.target.value); setBulkPreview(null); }}
+                  placeholder="엑셀에서 복사한 데이터를 여기에 붙여넣기..."
+                  className="w-full h-40 px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-white resize-y"
+                />
+                <div className="flex items-center gap-3">
+                  <button onClick={handleBulkPreview} disabled={bulkLoading || !bulkText.trim()} className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 transition-colors">
+                    {bulkLoading ? '파싱 중...' : '미리보기'}
+                  </button>
+                  {bulkPreview && bulkPreview.length > 0 && (
+                    <button onClick={handleBulkSave} disabled={bulkLoading} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors">
+                      {bulkLoading ? '저장 중...' : `${bulkPreview.length}건 저장`}
+                    </button>
+                  )}
+                  {bulkMsg && <span className={`text-xs px-3 py-1.5 rounded-full ${bulkMsg.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{bulkMsg}</span>}
                 </div>
-              )}
+                {bulkPreview && bulkPreview.length > 0 && (
+                  <div className="overflow-x-auto max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0">
+                        <tr className="bg-slate-100 border-b border-slate-200">
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">No</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">상품</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">선적월</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">공급사</th>
+                          <th className="px-2 py-1.5 text-right font-semibold text-slate-500">단가</th>
+                          <th className="px-2 py-1.5 text-right font-semibold text-slate-500">수량</th>
+                          <th className="px-2 py-1.5 text-right font-semibold text-slate-500">금액</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">Incoterms</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {bulkPreview.map((p: any, i: number) => (
+                          <tr key={i} className="hover:bg-slate-50/60">
+                            <td className="px-2 py-1.5 text-slate-400">{p.order_no || i + 1}</td>
+                            <td className="px-2 py-1.5"><span className={`font-medium px-1.5 py-0.5 rounded ${p.product === 'RBD' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{p.product}</span></td>
+                            <td className="px-2 py-1.5 tabular-nums">{p.shipment_month}</td>
+                            <td className="px-2 py-1.5 text-slate-600">{p.supplier || '-'}</td>
+                            <td className="px-2 py-1.5 tabular-nums text-right">${formatNumber(p.unit_price, 1)}</td>
+                            <td className="px-2 py-1.5 tabular-nums text-right">{formatNumber(p.qty_mt, 1)}</td>
+                            <td className="px-2 py-1.5 tabular-nums text-right">${formatNumber(p.amount_usd, 0)}</td>
+                            <td className="px-2 py-1.5 text-slate-500">{p.incoterms || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>)}
+
+              {/* ── PDF 모드 ── */}
+              {bulkMode === 'pdf' && (<>
+                <p className="text-xs text-slate-500">매매계약서(SC) PDF를 여러 장 첨부하면 AI가 자동으로 상품·단가·수량·계약번호를 추출합니다. 관리팜유(3-MCPD+GE+RSPO)도 자동 분류됩니다.</p>
+                <input ref={pdfBulkRef} type="file" accept=".pdf" multiple onChange={handlePdfBulkUpload} className="hidden" />
+                <div className="flex items-center gap-3">
+                  <button onClick={() => pdfBulkRef.current?.click()} disabled={pdfParsing} className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-40 transition-colors shadow-sm flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                    {pdfParsing ? '분석 중...' : 'PDF 첨부 (여러 장 가능)'}
+                  </button>
+                  {pdfRecords.length > 0 && (
+                    <button onClick={handlePdfBulkSave} disabled={bulkLoading} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors">
+                      {bulkLoading ? '저장 중...' : `${pdfRecords.length}건 저장`}
+                    </button>
+                  )}
+                  {pdfRecords.length > 0 && (
+                    <button onClick={() => setPdfRecords([])} className="text-xs text-slate-400 hover:text-slate-600">초기화</button>
+                  )}
+                  {pdfProgress && <span className="text-xs text-amber-700">{pdfProgress}</span>}
+                  {bulkMsg && <span className={`text-xs px-3 py-1.5 rounded-full ${bulkMsg.includes('완료') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{bulkMsg}</span>}
+                </div>
+
+                {/* PDF 파싱 결과 — 편집 가능한 미리보기 */}
+                {pdfRecords.length > 0 && (
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-100 border-b border-slate-200">
+                        <tr>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">파일</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">상품</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">선적월</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">공급사</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-slate-500">계약번호</th>
+                          <th className="px-2 py-1.5 text-right font-semibold text-slate-500">단가</th>
+                          <th className="px-2 py-1.5 text-right font-semibold text-slate-500">수량</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {pdfRecords.map((r: any, i: number) => {
+                          const missing = !r.product || !r.shipment_month || !r.unit_price || !r.qty_mt;
+                          return (
+                          <tr key={i} className={missing ? 'bg-rose-50/40' : 'hover:bg-slate-50/60'}>
+                            <td className="px-2 py-1.5 text-slate-400 max-w-[110px] truncate" title={r.source_file}>{r.source_file}</td>
+                            <td className="px-2 py-1.5">
+                              <select value={r.product || ''} onChange={e => updatePdfRecord(i, 'product', e.target.value)} className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white">
+                                <option value="RBD">RBD</option>
+                                <option value="RSPO">RSPO</option>
+                                <option value="MANAGED">관리팜유</option>
+                              </select>
+                            </td>
+                            <td className="px-2 py-1.5"><input value={r.shipment_month || ''} onChange={e => updatePdfRecord(i, 'shipment_month', e.target.value)} placeholder="2026-06" className="w-20 text-xs border border-slate-200 rounded px-1 py-0.5 bg-white" /></td>
+                            <td className="px-2 py-1.5 text-slate-600 max-w-[120px] truncate" title={r.supplier}>{r.supplier || '-'}</td>
+                            <td className="px-2 py-1.5 text-slate-500">{r.contract_number || '-'}</td>
+                            <td className="px-2 py-1.5 text-right"><input type="number" value={r.unit_price ?? ''} onChange={e => updatePdfRecord(i, 'unit_price', parseFloat(e.target.value) || null)} className="w-16 text-xs border border-slate-200 rounded px-1 py-0.5 bg-white text-right" /></td>
+                            <td className="px-2 py-1.5 text-right"><input type="number" value={r.qty_mt ?? ''} onChange={e => updatePdfRecord(i, 'qty_mt', parseFloat(e.target.value) || null)} className="w-16 text-xs border border-slate-200 rounded px-1 py-0.5 bg-white text-right" /></td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {pdfRecords.some((r: any) => !r.product || !r.shipment_month || !r.unit_price || !r.qty_mt) && (
+                  <p className="text-[11px] text-rose-600">⚠️ 붉은 행은 필수값(상품/선적월/단가/수량)이 비어 저장에서 제외됩니다. 직접 채워주세요.</p>
+                )}
+              </>)}
             </div>
           )}
 

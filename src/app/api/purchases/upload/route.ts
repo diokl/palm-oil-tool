@@ -149,20 +149,25 @@ export async function POST(request: NextRequest) {
             },
             {
               type: 'text',
-              text: `Extract the following fields from this SC (Sales Contract) PDF document. Return a JSON object with these fields:
-- contract_number: Contract reference number
-- contract_date: in YYYY-MM-DD format
-- product: "RBD" or "RSPO" (based on product description)
-- quantity_mt: quantity in metric tons (number only)
-- contract_price: price in USD per MT (number only)
-- shipment_month: in YYYY-MM format
-- supplier: seller/supplier company name
-- incoterms: CIF, FOB, CFR, etc.
-- payment_terms: payment terms text
-- loading_port: port of loading
-- discharge_port: port of discharge
+              text: `Extract fields from this palm oil Sales Contract (SC) PDF. Return ONE JSON object.
 
-Use null for any fields you cannot extract. Return ONLY valid JSON, no markdown, no explanation.`,
+Fields:
+- contract_number: contract / SC reference number (e.g. "S55273/2606", "40409698")
+- contract_date: trade/contract date in YYYY-MM-DD (look for "Date of Trade", "DATE")
+- product: classify by specifications —
+    * "MANAGED" if BOTH 3-MCPD (low, e.g. 2.5 ppm max) AND GE/Glycidyl Esters control are specified (관리팜유 = Low 3-MCPD + Low GE + RSPO)
+    * "RSPO" if RSPO / Mass Balance but NO 3-MCPD/GE control
+    * "RBD" for plain RBD palm oil
+- qty_mt: quantity in metric tons (number only, ignore +/- tolerance)
+- unit_price: price in USD per MT (number only)
+- shipment_month: in YYYY-MM format (e.g. "JUNE 2026" -> "2026-06")
+- supplier: seller company name (e.g. "IOI GLOBAL SERVICES SDN. BHD.", "WILMAR TRADING PTE LTD")
+- incoterms: FOB, CIF, CFR, etc.
+- payment_terms: payment terms text (short)
+- loading_port: port of loading
+- specs_note: short note of key specs (e.g. "3-MCPD 2.5ppm, GE 1.0ppm, RSPO MB")
+
+Use null for fields you cannot extract. Return ONLY valid JSON, no markdown.`,
             },
           ],
         },
@@ -192,10 +197,31 @@ Use null for any fields you cannot extract. Return ONLY valid JSON, no markdown,
       console.warn('Failed to parse Claude JSON response, using empty result');
     }
 
+    // 구매 row 형태로 정규화 (bulk 미리보기/저장 호환)
+    const qty = extracted.qty_mt ?? extracted.quantity_mt ?? null;
+    const price = extracted.unit_price ?? extracted.contract_price ?? null;
+    const rawProduct = String(extracted.product || '').toUpperCase();
+    const product = ['MANAGED', 'RSPO', 'RBD'].includes(rawProduct) ? rawProduct : 'RBD';
+    const normalized = {
+      product,
+      shipment_month: extracted.shipment_month ?? null,
+      unit_price: price != null ? Number(price) : null,
+      qty_mt: qty != null ? Number(qty) : null,
+      amount_usd: (price != null && qty != null) ? Number(price) * Number(qty) : null,
+      supplier: extracted.supplier ?? null,
+      contract_number: extracted.contract_number ?? null,
+      contract_date: extracted.contract_date ?? null,
+      incoterms: extracted.incoterms ?? null,
+      payment_terms: extracted.payment_terms ?? null,
+      notes: extracted.specs_note ? `PDF: ${file.name} | ${extracted.specs_note}` : `PDF: ${file.name}`,
+      source_file: file.name,
+    };
+
     return NextResponse.json({
       success: true,
       extracted,
-      raw_text: `[Claude API로 추출] 파일: ${file.name}, 모델: claude-sonnet-4-20250514`,
+      record: normalized,
+      raw_text: `[Claude API로 추출] 파일: ${file.name}`,
     });
   } catch (error: any) {
     console.error('PDF parse error:', error);
