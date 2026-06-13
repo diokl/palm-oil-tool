@@ -3969,7 +3969,7 @@ const NewsTab = () => {
   const fetchNews = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/news');
+      const res = await fetch('/api/news?limit=300');
       const json: NewsResponse = await res.json();
       setNewsData(json.data || []);
       setSentimentSummary(json.sentiment_summary || null);
