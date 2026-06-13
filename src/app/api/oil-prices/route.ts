@@ -32,8 +32,8 @@ export async function POST(request: NextRequest) {
       const commodity = body.commodity || 'SBO';
       const unit = body.unit_native || 'cents/lb';
       const lines = body.text.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
-      // 여러 줄 → upsert ops 빌드 후 배치 실행(수백 행도 타임아웃 없이).
-      const ops: { sql: string; params: any[] }[] = [];
+      // 파싱 → [date, commodity, native, unit, usd] 행 배열
+      const rows: any[][] = [];
       for (const line of lines) {
         const m = line.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[,\s]+([\d.]+)/);
         if (!m) continue;
@@ -41,19 +41,25 @@ export async function POST(request: NextRequest) {
         const native = parseFloat(m[4]);
         if (isNaN(native)) continue;
         const usd = Math.round(toUsdMt(native, unit) * 100) / 100;
+        rows.push([date, commodity, native, unit, usd]);
+      }
+      // 다중행 INSERT(청크당 1회 왕복) → 수백 행도 빠르게. 청크들을 한 트랜잭션으로.
+      const CHUNK = 200;
+      const ops: { sql: string; params: any[] }[] = [];
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const chunk = rows.slice(i, i + CHUNK);
+        const values = chunk.map(() => `(?, ?, ?, ?, ?, 'manual_bulk')`).join(', ');
         ops.push({
           sql: `INSERT INTO oil_prices (date, commodity, price_native, unit_native, price_usd_mt, source)
-                VALUES (?, ?, ?, ?, ?, 'manual_bulk')
+                VALUES ${values}
                 ON CONFLICT (date, commodity) DO UPDATE SET
                   price_native = EXCLUDED.price_native, unit_native = EXCLUDED.unit_native,
                   price_usd_mt = EXCLUDED.price_usd_mt, source = EXCLUDED.source`,
-          params: [date, commodity, native, unit, usd],
+          params: chunk.flat(),
         });
       }
-      for (let i = 0; i < ops.length; i += 100) {
-        await dbBatchRun(ops.slice(i, i + 100));
-      }
-      return NextResponse.json({ success: true, applied: ops.length });
+      if (ops.length) await dbBatchRun(ops);
+      return NextResponse.json({ success: true, applied: rows.length });
     }
 
     const { date, commodity, price_native, unit_native } = body;
