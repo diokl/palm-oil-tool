@@ -1133,7 +1133,7 @@ const OilSpreadWidget = ({ data, onNavigate }: {
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
         <div className="card p-4">
-          <div className="text-xs text-slate-500 mb-1">팜유 (CPO)</div>
+          <div className="text-xs text-slate-500 mb-1" title="FCPO 최근월 종가, MYR은 USD/MYR 환율로 자동 환산">팜유 (FCPO 최근월)</div>
           <div className="text-xl font-bold text-slate-800 tabular-nums">{fmt(latest?.palm)}<span className="text-xs font-normal text-slate-400 ml-1">/MT</span></div>
         </div>
         <div className="card p-4">
