@@ -27,10 +27,10 @@ export async function POST() {
       ],
     }));
 
-    // Batch in chunks to keep transactions small.
-    for (let i = 0; i < ops.length; i += 100) {
-      await dbBatchRun(ops.slice(i, i + 100));
-    }
+    // Batch in chunks, run chunks in parallel (Vercel 60s 제한 대비 시간 절약).
+    const chunks: typeof ops[] = [];
+    for (let i = 0; i < ops.length; i += 100) chunks.push(ops.slice(i, i + 100));
+    await Promise.all(chunks.map((c) => dbBatchRun(c)));
 
     return NextResponse.json({
       success: true,

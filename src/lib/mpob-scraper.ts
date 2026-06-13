@@ -281,35 +281,35 @@ export async function scrapeMPOBData(): Promise<MpobScrapeResult> {
   const jar = new CookieJar();
   await login(jar);
 
-  const records: MpobScrapedRecord[] = [];
-  const summary: MpobScrapeResult['summary'] = [];
+  // 4개 카테고리를 병렬로 수집 (순차로 하면 Vercel 60초 제한 초과 → 504).
+  const perCategory = await Promise.all(
+    REPORT_PAGES.map(async (page): Promise<{ records: MpobScrapedRecord[]; summary: MpobScrapeResult['summary'][number] }> => {
+      try {
+        const pageHtml = await getText(jar, page.url);
+        const val = extractReportVal(pageHtml);
+        if (!val) {
+          return { records: [], summary: { category: page.category, val: null, count: 0, error: 'iframe report val을 찾지 못함' } };
+        }
+        const reportHtml = await getText(jar, `${MPOB_BASE}/stat/web_report1.php?val=${val}`);
+        const year = parseInt(val.slice(0, 4), 10) || new Date().getFullYear();
 
-  for (const page of REPORT_PAGES) {
-    try {
-      const pageHtml = await getText(jar, page.url);
-      const val = extractReportVal(pageHtml);
-      if (!val) {
-        summary.push({ category: page.category, val: null, count: 0, error: 'iframe report val을 찾지 못함' });
-        continue;
+        let recs: MpobScrapedRecord[] = [];
+        if (page.category === 'stock' || page.category === 'production') {
+          recs = parseStockProduction(reportHtml, page.category);
+        } else if (page.category === 'export_port') {
+          recs = parseExportPort(reportHtml, year);
+        } else if (page.category === 'export_product') {
+          recs = parseExportProduct(reportHtml, year);
+        }
+        return { records: recs, summary: { category: page.category, val, count: recs.length } };
+      } catch (err: any) {
+        return { records: [], summary: { category: page.category, val: null, count: 0, error: err.message } };
       }
-      const reportHtml = await getText(jar, `${MPOB_BASE}/stat/web_report1.php?val=${val}`);
-      const year = parseInt(val.slice(0, 4), 10) || new Date().getFullYear();
+    }),
+  );
 
-      let recs: MpobScrapedRecord[] = [];
-      if (page.category === 'stock' || page.category === 'production') {
-        recs = parseStockProduction(reportHtml, page.category);
-      } else if (page.category === 'export_port') {
-        recs = parseExportPort(reportHtml, year);
-      } else if (page.category === 'export_product') {
-        recs = parseExportProduct(reportHtml, year);
-      }
-
-      records.push(...recs);
-      summary.push({ category: page.category, val, count: recs.length });
-    } catch (err: any) {
-      summary.push({ category: page.category, val: null, count: 0, error: err.message });
-    }
-  }
+  const records: MpobScrapedRecord[] = perCategory.flatMap((p) => p.records);
+  const summary: MpobScrapeResult['summary'] = perCategory.map((p) => p.summary);
 
   if (records.length === 0) {
     throw new Error('MPOB에서 수집된 데이터가 없습니다. 로그인 또는 사이트 구조를 확인하세요.');
