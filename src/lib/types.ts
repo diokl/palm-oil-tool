@@ -19,6 +19,7 @@ export interface InventoryRow {
   month: number;
   expected_usage: number | null;
   customs_volume: number | null;
+  sales_volume?: number | null;   // 외부 판매 출고 (kg)
   ending_stock: number | null;
   coverage_days: number | null;
   contract_price: string | null;

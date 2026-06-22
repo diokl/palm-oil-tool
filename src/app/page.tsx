@@ -128,6 +128,7 @@ interface InventoryItem {
   month: number;
   expected_usage: number;
   customs_volume: number;
+  sales_volume?: number;   // 외부 판매 출고 (kg)
   ending_stock: number;
   coverage_days: number;
   contract_price: string | number;
@@ -2111,17 +2112,18 @@ const InventoryTab = () => {
       (rows[idx] as any)[field] = value;
 
       // Derive prev-year ending stock from the first row's current values.
-      // 처음 입력 시작인 신규 product(예: MANAGED)는 모든 필드가 null일 수 있으므로 null-safe.
+      // 기말 = 이전월기말 + 통관 - 소요 - 판매  →  이전월기말 = 기말 - 통관 + 소요 + 판매
       const first = prev[0];
       const prevYearEnd =
-        (first.ending_stock ?? 0) + (first.expected_usage ?? 0) - (first.customs_volume ?? 0);
+        (first.ending_stock ?? 0) + (first.expected_usage ?? 0) + (first.sales_volume ?? 0) - (first.customs_volume ?? 0);
 
       // Recalculate ending_stock & coverage_days for all rows sequentially
       let prevStock = prevYearEnd;
       for (let i = 0; i < rows.length; i++) {
         const usage = rows[i].expected_usage ?? 0;
         const customs = rows[i].customs_volume ?? 0;
-        rows[i].ending_stock = prevStock + customs - usage;
+        const sales = rows[i].sales_volume ?? 0;
+        rows[i].ending_stock = prevStock + customs - usage - sales;
         rows[i].coverage_days = usage > 0 ? Math.round((rows[i].ending_stock / usage) * 10) / 10 : 0;
         prevStock = rows[i].ending_stock;
       }
@@ -2289,6 +2291,10 @@ const InventoryTab = () => {
                     통관수량(kg)
                     <span className="ml-1 text-blue-400">✎</span>
                   </th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    판매량(kg)
+                    <span className="ml-1 text-blue-400">✎</span>
+                  </th>
                   <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">기말재고(kg)</th>
                   <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">재고회전일</th>
                   <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -2323,6 +2329,15 @@ const InventoryTab = () => {
                           <span className="absolute -top-1 -right-1 text-[8px] text-blue-500" title={`구매이력 기준: ${formatNumber(af.customs_volume)} (선적월: ${af.shipment_month})`}>●</span>
                         )}
                       </div>
+                    </td>
+                    <td className="px-5 py-3">
+                      {/* 판매량: 외부 판매 출고. 값 있으면 빨간색 강조 */}
+                      <span className={(row.sales_volume ?? 0) > 0 ? 'text-rose-600 font-medium' : ''}>
+                        <EditableCell
+                          value={row.sales_volume ?? 0}
+                          onSave={(val) => handleCellSave(row.id, 'sales_volume', val)}
+                        />
+                      </span>
                     </td>
                     <td className={`px-5 py-3 tabular-nums font-semibold text-right ${
                       (row.ending_stock ?? 0) < 0 ? 'text-rose-600 bg-rose-50/50' :

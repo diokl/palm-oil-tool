@@ -115,7 +115,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, field, value, edited_by } = body;
 
-    const allowedFields = ['expected_usage', 'customs_volume', 'contract_price', 'contract_date'];
+    const allowedFields = ['expected_usage', 'customs_volume', 'sales_volume', 'contract_price', 'contract_date'];
     if (!allowedFields.includes(field)) {
       return NextResponse.json({ error: `Field '${field}' is not editable` }, { status: 400 });
     }

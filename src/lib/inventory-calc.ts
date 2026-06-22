@@ -92,7 +92,8 @@ export async function recalcInventory(
   for (const row of rows) {
     const usage = row.expected_usage ?? 0;
     const customs = row.customs_volume ?? 0;
-    const endingStock = prevStock + customs - usage;
+    const sales = row.sales_volume ?? 0;  // 외부 판매 출고
+    const endingStock = prevStock + customs - usage - sales;
     const coverageDays = usage > 0 ? Math.round((endingStock / usage) * 10) / 10 : 0;
     updates.push({ id: row.id!, endingStock, coverageDays });
     prevStock = endingStock;
