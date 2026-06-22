@@ -19,11 +19,38 @@ const HOLIDAYS_2026 = new Set([
   '2026-10-09', // 한글날
 ]);
 
-// 월별 BOM 소요 (kg) — 엑셀 '월별 재고수불(투입)' BOM 플랜트(원주1100/익산1200/밀양1400) 합산
-export const MONTHLY_DEMAND = {
+// 월별 BOM 소요 기본값 (DB demand_config 없을 때 fallback)
+export const MONTHLY_DEMAND_DEFAULT = {
   RPO:  { '2026-06': 2703297.5, '2026-07': 3130781.6, '2026-08': 2772958.3 },
   RSPO: { '2026-06': 659648.9,  '2026-07': 338544.2,  '2026-08': 201103.4 },
 };
+
+// DB에서 월별 소요 로드 (없으면 기본값)
+async function loadMonthlyDemand(): Promise<{ RPO: Record<string, number>; RSPO: Record<string, number> }> {
+  const rows = await dbAll(
+    `SELECT product, month, monthly_kg FROM demand_config`,
+  ).catch(() => []) as { product: string; month: string; monthly_kg: number }[];
+  if (rows.length === 0) return JSON.parse(JSON.stringify(MONTHLY_DEMAND_DEFAULT));
+  const out: { RPO: Record<string, number>; RSPO: Record<string, number> } = { RPO: {}, RSPO: {} };
+  for (const r of rows) {
+    if (r.product === 'RPO') out.RPO[r.month] = Number(r.monthly_kg);
+    else if (r.product === 'RSPO') out.RSPO[r.month] = Number(r.monthly_kg);
+  }
+  return out;
+}
+
+// 일별 조정 로드 (날짜+품목별 합산)
+async function loadDailyAdjustments(): Promise<Map<string, number>> {
+  const rows = await dbAll(
+    `SELECT date, product, delta_kg FROM daily_adjustments`,
+  ).catch(() => []) as { date: string; product: string; delta_kg: number }[];
+  const map = new Map<string, number>(); // key=`${date}|${product}`
+  for (const r of rows) {
+    const k = `${r.date}|${r.product}`;
+    map.set(k, (map.get(k) || 0) + Number(r.delta_kg));
+  }
+  return map;
+}
 
 export const MGD_QTY_KG = 7500000;      // 관리팜유 7,500톤
 export const JUN_SALES_RPO = 4000000;   // 6월 RPO 외부판매 4,000톤
@@ -82,9 +109,8 @@ export async function getBaseStock(): Promise<{ rpo: number; rspo: number }> {
 
 // 일소요 (해당 날짜의 월 소요 ÷ 그 달 영업일수)
 // 9월 이후는 정의된 마지막 월(8월) 소요를 연장 적용 (엑셀 '8월 일평균 기준 추정' 동일)
-function dailyDemand(product: 'RPO' | 'RSPO', d: Date): number {
+function dailyDemand(table: Record<string, number>, d: Date): number {
   const mk = monthKey(d);
-  const table = MONTHLY_DEMAND[product] as Record<string, number>;
   const monthDemand = table[mk] ?? table['2026-08']; // fallback: 8월 소요 연장
   if (!monthDemand) return 0;
   const bdays = businessDaysInMonth(mk);
@@ -92,10 +118,9 @@ function dailyDemand(product: 'RPO' | 'RSPO', d: Date): number {
 }
 
 export async function simulate(injectDateStr: string): Promise<SimResult> {
-  const base = await getBaseStock();
+  const [base, demand, adjustments] = await Promise.all([getBaseStock(), loadMonthlyDemand(), loadDailyAdjustments()]);
   const START = new Date(Date.UTC(2026, 5, 1)); // 6/1
-  const END = new Date(Date.UTC(2026, 9, 31));  // 10/31
-  const inject = new Date(injectDateStr + 'T00:00:00Z');
+  const END = new Date(Date.UTC(2026, 11, 31)); // 12/31 (소요 12월까지 조정 가능)
 
   let rpo = base.rpo, rspo = base.rspo;
   let mgd: number | null = null; // 투입 전 null
@@ -121,8 +146,11 @@ export async function simulate(injectDateStr: string): Promise<SimResult> {
     }
 
     if (biz) {
-      const dRpo = dailyDemand('RPO', d);
-      const dRspo = dailyDemand('RSPO', d);
+      // 일소요 = 월소요/영업일 + 일별 조정(정제사 이송/롯데웰푸드 등). 음수면 소진 감소.
+      const adjRpo = adjustments.get(`${dstr}|RPO`) || 0;
+      const adjRspo = adjustments.get(`${dstr}|RSPO`) || 0;
+      const dRpo = Math.max(0, dailyDemand(demand.RPO, d) + adjRpo);
+      const dRspo = Math.max(0, dailyDemand(demand.RSPO, d) + adjRspo);
       if (mgdStarted && mgd != null && mgd > 0) {
         // 관리팜유 투입 후: 통합 수요를 관리팜유로 충당 (기존재고는 동결=미소진)
         mgd = Math.max(0, mgd - (dRpo + dRspo));

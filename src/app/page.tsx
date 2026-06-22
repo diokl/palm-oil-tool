@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  ComposedChart, Bar
+  ComposedChart, Bar, Area, AreaChart, ReferenceLine
 } from 'recharts';
 
 // ============ AUTH CONTEXT ============
@@ -2070,6 +2070,23 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
     await fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, qty_kg: qty }) });
     fetchSim(injectDate);
   };
+  // 월별 소요 수정
+  const saveDemand = async (product: string, month: string, monthly_kg: number) => {
+    await fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'demand', product, month, monthly_kg }) });
+    fetchSim(injectDate);
+  };
+  // 일별 조정 추가/삭제
+  const [adjForm, setAdjForm] = useState({ date: '2026-07-01', product: 'RPO', delta_kg: '', label: '롯데웰푸드' });
+  const addAdj = async () => {
+    if (!adjForm.date || !adjForm.delta_kg) return;
+    await fetch('/api/mgd-simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...adjForm, delta_kg: parseFloat(adjForm.delta_kg) }) });
+    setAdjForm({ ...adjForm, delta_kg: '' });
+    fetchSim(injectDate);
+  };
+  const delAdj = async (id: number) => {
+    await fetch(`/api/mgd-simulation?adj_id=${id}`, { method: 'DELETE' });
+    fetchSim(injectDate);
+  };
 
   const fmtKg = (n: number | null | undefined) => n == null ? '—' : `${(n / 1000).toFixed(0)}톤`;
   const fmtKgFull = (n: number | null | undefined) => n == null ? '—' : Math.round(n).toLocaleString();
@@ -2081,9 +2098,15 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
   ];
 
   const sim = data?.sim;
-  const chartData = (sim?.daily || []).filter((_: any, i: number) => i % 2 === 0).map((p: any) => ({
-    date: p.date?.slice(5), RPO: p.rpo, RSPO: p.rspo, 관리팜유: p.mgd,
+  const chartData = (sim?.daily || []).map((p: any) => ({
+    date: p.date, label: p.date?.slice(5), RPO: p.rpo, RSPO: p.rspo, 관리팜유: p.mgd, 통합: p.combined,
   }));
+  const monthGrid: Record<string, Record<string, any>> = {};
+  for (const d of (data?.demand || [])) {
+    monthGrid[d.month] = monthGrid[d.month] || {};
+    monthGrid[d.month][d.product] = d;
+  }
+  const months = Object.keys(monthGrid).sort();
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -2151,24 +2174,113 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
         </div>
       )}
 
-      {/* 일별 재고 소진 차트 */}
+      {/* 일별 재고 소진 차트 — 가시성 개선 (영역+투입일선+소진마커) */}
       {chartData.length >= 2 && (
         <div className="card p-4">
-          <p className="text-sm font-semibold text-slate-700 mb-2">일별 재고 소진 (영업일 기준)</p>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="date" tick={{ fontSize: 9 }} interval={14} />
-              <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1000000).toFixed(0)}M`} />
-              <Tooltip formatter={(v: any) => v != null ? `${Math.round(v).toLocaleString()} kg` : '-'} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Line type="monotone" dataKey="RPO" stroke="#d97706" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="RSPO" stroke="#2563eb" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="관리팜유" stroke="#7c3aed" strokeWidth={2} dot={false} />
-            </LineChart>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold text-slate-700">일별 재고 소진 (영업일 기준)</p>
+            <div className="flex gap-3 text-[11px]">
+              <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm" style={{background:'#fdba74'}}/>RPO</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm" style={{background:'#93c5fd'}}/>RSPO</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm" style={{background:'#c4b5fd'}}/>관리팜유</span>
+              <span className="flex items-center gap-1"><span className="w-3 border-t-2 border-dashed" style={{borderColor:'#6366f1'}}/>투입일</span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gRpo" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59e0b" stopOpacity={0.5}/><stop offset="95%" stopColor="#f59e0b" stopOpacity={0.05}/></linearGradient>
+                <linearGradient id="gRspo" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.45}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0.05}/></linearGradient>
+                <linearGradient id="gMgd" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.5}/><stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.05}/></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 9 }} interval={20} minTickGap={20} />
+              <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1000000).toFixed(1)}M`} width={38} />
+              <Tooltip formatter={(v: any) => v != null ? `${Math.round(v).toLocaleString()} kg` : '-'} labelStyle={{ fontSize: 11 }} contentStyle={{ fontSize: 11 }} />
+              {/* 투입일 세로 점선 */}
+              {sim?.inject_date && <ReferenceLine x={sim.inject_date.slice(5)} stroke="#6366f1" strokeDasharray="4 3" label={{ value: '투입', fontSize: 10, fill: '#6366f1', position: 'top' }} />}
+              {/* 소진일 마커 */}
+              {sim?.rpo_depletion && <ReferenceLine x={sim.rpo_depletion.slice(5)} stroke="#f59e0b" strokeDasharray="2 2" />}
+              {sim?.mgd_depletion && <ReferenceLine x={sim.mgd_depletion.slice(5)} stroke="#8b5cf6" strokeDasharray="2 2" />}
+              <Area type="monotone" dataKey="RPO" stroke="#f59e0b" strokeWidth={2} fill="url(#gRpo)" />
+              <Area type="monotone" dataKey="RSPO" stroke="#3b82f6" strokeWidth={2} fill="url(#gRspo)" />
+              <Area type="monotone" dataKey="관리팜유" stroke="#8b5cf6" strokeWidth={2} fill="url(#gMgd)" />
+            </AreaChart>
           </ResponsiveContainer>
+          <p className="text-[11px] text-slate-400 mt-1">세로 점선: 관리팜유 투입일 · RPO/관리팜유 소진 시점</p>
         </div>
       )}
+
+      {/* 월별 소요량 편집 */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
+          <p className="text-sm font-semibold text-slate-700">월별 소요량 (편집 가능)</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">정제사(삼양사·삼양제분) 向 원유 소요. 9월 이후는 8월값 연장. 수정 시 소진일 자동 재계산</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-100">
+              <th className="px-3 py-2 text-left text-xs text-slate-500">품목</th>
+              {months.map(m => <th key={m} className="px-3 py-2 text-right text-xs text-slate-500">{m.slice(5)}월</th>)}
+            </tr></thead>
+            <tbody className="divide-y divide-slate-50">
+              {['RPO', 'RSPO'].map(prod => (
+                <tr key={prod} className="hover:bg-slate-50/60">
+                  <td className="px-3 py-2 font-medium text-slate-700">{prod}</td>
+                  {months.map(m => {
+                    const cell = monthGrid[m]?.[prod as 'RPO' | 'RSPO'];
+                    return (
+                      <td key={m} className="px-3 py-2 text-right">
+                        {canWrite && cell
+                          ? <EditableCell value={cell.monthly_kg} onSave={(v) => saveDemand(prod, m, v)} />
+                          : <span className="tabular-nums text-xs">{fmtKgFull(cell?.monthly_kg)}</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 일별 미세조정 (정제사 이송 / 롯데웰푸드 등) */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
+          <p className="text-sm font-semibold text-slate-700">일별 미세조정</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">특정일 소진 가감. (+)정제사 이송·판매로 소진↑ / (−)롯데웰푸드 제품구매로 자체소비↓ → 소진일 연장</p>
+        </div>
+        {canWrite && (
+          <div className="px-4 py-3 flex flex-wrap items-end gap-2 border-b border-slate-100">
+            <div><label className="text-[10px] text-slate-500 block">날짜</label><input type="date" value={adjForm.date} onChange={e => setAdjForm({ ...adjForm, date: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
+            <div><label className="text-[10px] text-slate-500 block">품목</label>
+              <select value={adjForm.product} onChange={e => setAdjForm({ ...adjForm, product: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white"><option>RPO</option><option>RSPO</option></select>
+            </div>
+            <div><label className="text-[10px] text-slate-500 block">유형</label>
+              <select value={adjForm.label} onChange={e => setAdjForm({ ...adjForm, label: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white"><option>롯데웰푸드</option><option>정제사이송</option><option>판매</option><option>기타</option></select>
+            </div>
+            <div><label className="text-[10px] text-slate-500 block">증감(kg, −는 감소)</label><input type="number" value={adjForm.delta_kg} onChange={e => setAdjForm({ ...adjForm, delta_kg: e.target.value })} placeholder="예: -200000" className="w-28 px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
+            <button onClick={addAdj} disabled={!adjForm.delta_kg} className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 disabled:opacity-40">추가</button>
+          </div>
+        )}
+        <div className="overflow-x-auto max-h-52 overflow-y-auto">
+          <table className="w-full text-xs">
+            <tbody className="divide-y divide-slate-50">
+              {(data?.adjustments || []).length === 0 ? (
+                <tr><td className="px-4 py-3 text-slate-400">조정 내역 없음. 위에서 추가하세요.</td></tr>
+              ) : (data?.adjustments || []).map((a: any) => (
+                <tr key={a.id} className="hover:bg-slate-50/60">
+                  <td className="px-4 py-1.5 tabular-nums text-slate-500">{a.date}</td>
+                  <td className="px-2 py-1.5">{a.product}</td>
+                  <td className="px-2 py-1.5"><span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{a.label}</span></td>
+                  <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${a.delta_kg >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{a.delta_kg >= 0 ? '+' : ''}{Math.round(a.delta_kg).toLocaleString()}</td>
+                  {canWrite && <td className="px-2 py-1.5 text-right"><button onClick={() => delAdj(a.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* 위치별 재고 (편집) */}
       <div className="card overflow-hidden">
