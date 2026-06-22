@@ -78,6 +78,16 @@ export async function GET() {
       `SELECT * FROM news ORDER BY date DESC LIMIT 5`
     );
 
+    // 핵심 이슈 — 핀(is_key) 또는 High impact, 최신순 (best-effort: is_key 컬럼 없을 수 있음)
+    let keyIssues: any[] = [];
+    try {
+      keyIssues = await dbAll(
+        `SELECT * FROM news WHERE is_key = 1 OR impact = 'High' ORDER BY is_key DESC, date DESC LIMIT 6`
+      );
+    } catch {
+      keyIssues = await dbAll(`SELECT * FROM news WHERE impact = 'High' ORDER BY date DESC LIMIT 6`);
+    }
+
     // MPOB Summary — 25/26 모두 가져와 YoY 계산 가능하게
     let mpobSummary: any[] = [];
     try {
@@ -182,6 +192,7 @@ export async function GET() {
       ai_analysis: latestAnalysis?.result ? JSON.parse(latestAnalysis.result) : null,
       prebuy_effect: prebuyEffect,
       oil_spread: oilSpread,
+      key_issues: keyIssues,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

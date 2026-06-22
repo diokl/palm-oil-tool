@@ -91,6 +91,7 @@ interface DashboardData {
   mpob_summary: MpobSummaryRow[];
   recent_purchases: RecentPurchaseItem[];
   recent_news: NewsItem[];
+  key_issues?: NewsItem[];
   ai_analysis: string | null;
   prebuy_effect: {
     months: Array<{
@@ -1063,6 +1064,31 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
             )}
           </div>}
 
+          {/* 핵심 이슈 */}
+          {data.key_issues && data.key_issues.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <span className="w-2 h-2 bg-rose-500 rounded-full" />
+                핵심 이슈
+              </h3>
+              <div className="card divide-y divide-slate-100">
+                {data.key_issues.slice(0, 5).map((iss) => {
+                  const sc = iss.sentiment === '강세' ? 'bg-emerald-100 text-emerald-700'
+                    : iss.sentiment === '약세' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600';
+                  return (
+                    <div key={iss.id} className="px-4 py-2.5 flex items-start gap-2.5 hover:bg-slate-50/60">
+                      <span className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded ${sc}`}>{iss.sentiment || '-'}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-slate-700 leading-snug">{iss.content}</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{iss.date}{iss.impact === 'High' && <span className="ml-1.5 text-rose-500">● 중요</span>}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Recent News */}
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-slate-700">최근 뉴스</h3>
@@ -2024,8 +2050,176 @@ interface AutofillSuggestion {
   shipment_month: string;
 }
 
+// ============ 관리팜유 투입 시뮬레이터 ============
+const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
+  const { canWrite } = useAuth();
+  const [injectDate, setInjectDate] = useState('2026-07-24');
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchSim = async (d: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/mgd-simulation?inject_date=${d}`);
+      setData(await res.json());
+    } catch { /* noop */ } finally { setLoading(false); }
+  };
+  useEffect(() => { fetchSim(injectDate); }, [injectDate]);
+
+  const saveLoc = async (id: number, qty: number) => {
+    await fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, qty_kg: qty }) });
+    fetchSim(injectDate);
+  };
+
+  const fmtKg = (n: number | null | undefined) => n == null ? '—' : `${(n / 1000).toFixed(0)}톤`;
+  const fmtKgFull = (n: number | null | undefined) => n == null ? '—' : Math.round(n).toLocaleString();
+  const SCEN = [
+    { id: 1, label: '1안', sub: '7/15 투입', date: '2026-07-15' },
+    { id: 2, label: '2안', sub: '7/24 투입', date: '2026-07-24' },
+    { id: 3, label: '3안', sub: '소진후 7/30', date: '2026-07-30' },
+    { id: 4, label: '4안', sub: '7/1 병행', date: '2026-07-01' },
+  ];
+
+  const sim = data?.sim;
+  const chartData = (sim?.daily || []).filter((_: any, i: number) => i % 2 === 0).map((p: any) => ({
+    date: p.date?.slice(5), RPO: p.rpo, RSPO: p.rspo, 관리팜유: p.mgd,
+  }));
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-700">← 재고표</button>
+          <h3 className="text-base font-bold text-slate-800">관리팜유 투입 시뮬레이터</h3>
+        </div>
+        <span className="text-xs text-slate-400">기존 RPO+RSPO 소진 후 관리팜유 7,500톤 전환 투입</span>
+      </div>
+
+      {/* 시나리오 4안 + 커스텀 투입일 */}
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-slate-700">투입 시작일</p>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-slate-500">직접 지정</label>
+            <input type="date" value={injectDate} onChange={e => setInjectDate(e.target.value)} className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {SCEN.map(s => {
+            const scen = data?.scenarios?.find((x: any) => x.id === s.id);
+            const active = injectDate === s.date;
+            return (
+              <button key={s.id} onClick={() => setInjectDate(s.date)}
+                className={`p-3 rounded-xl border text-left transition-all ${active ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                <div className="flex items-baseline justify-between">
+                  <span className={`text-sm font-bold ${active ? 'text-indigo-700' : 'text-slate-700'}`}>{s.label}</span>
+                  <span className="text-[10px] text-slate-400">{s.sub}</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">미소진</div>
+                <div className={`text-sm font-semibold tabular-nums ${(scen?.unsold ?? 0) > 1000000 ? 'text-rose-600' : (scen?.unsold ?? 0) > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                  {scen ? fmtKg(scen.unsold) : '—'}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 결과 카드 */}
+      {sim && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="card p-4">
+            <div className="text-xs text-slate-500 mb-1">투입일 기존재고 미소진</div>
+            <div className="text-xl font-bold text-amber-600 tabular-nums">{fmtKg(sim.unsold)}</div>
+            <div className="text-[11px] text-slate-400 mt-1">판매·재배치 필요</div>
+          </div>
+          <div className="card p-4">
+            <div className="text-xs text-slate-500 mb-1">└ RPO / RSPO 잔량</div>
+            <div className="text-sm font-semibold text-slate-700 tabular-nums">{fmtKgFull(sim.at_inject?.rpo)}</div>
+            <div className="text-sm font-semibold text-slate-700 tabular-nums">{fmtKgFull(sim.at_inject?.rspo)}</div>
+          </div>
+          <div className="card p-4">
+            <div className="text-xs text-slate-500 mb-1">관리팜유 소진예상일</div>
+            <div className="text-xl font-bold text-indigo-600 tabular-nums">{sim.mgd_depletion ?? '—'}</div>
+            <div className="text-[11px] text-slate-400 mt-1">7,500톤 기준</div>
+          </div>
+          <div className="card p-4">
+            <div className="text-xs text-slate-500 mb-1">RPO·통합 소진일</div>
+            <div className="text-sm font-semibold text-slate-700">RPO {sim.rpo_depletion ?? '—'}</div>
+            <div className="text-sm font-semibold text-slate-700">통합 {sim.combined_depletion ?? '—'}</div>
+          </div>
+        </div>
+      )}
+
+      {/* 일별 재고 소진 차트 */}
+      {chartData.length >= 2 && (
+        <div className="card p-4">
+          <p className="text-sm font-semibold text-slate-700 mb-2">일별 재고 소진 (영업일 기준)</p>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="date" tick={{ fontSize: 9 }} interval={14} />
+              <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1000000).toFixed(0)}M`} />
+              <Tooltip formatter={(v: any) => v != null ? `${Math.round(v).toLocaleString()} kg` : '-'} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Line type="monotone" dataKey="RPO" stroke="#d97706" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="RSPO" stroke="#2563eb" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="관리팜유" stroke="#7c3aed" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* 위치별 재고 (편집) */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-700">위치별 재고 (총 가용재고)</p>
+          <span className="text-xs text-slate-400">RPO {fmtKgFull(data?.base?.rpo)} · RSPO {fmtKgFull(data?.base?.rspo)} kg</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-100">
+              <th className="px-4 py-2 text-left text-xs text-slate-500">위치</th>
+              <th className="px-4 py-2 text-right text-xs text-slate-500">RPO (kg)</th>
+              <th className="px-4 py-2 text-right text-xs text-slate-500">RSPO (kg)</th>
+              <th className="px-4 py-2 text-left text-xs text-slate-500">기준일</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-50">
+              {Object.values((data?.locations || []).reduce((acc: any, l: any) => {
+                acc[l.location] = acc[l.location] || { location: l.location };
+                acc[l.location][l.product] = l;
+                return acc;
+              }, {})).map((grp: any, i: number) => {
+                const isFactory = ['원주공장', '익산공장', '밀양공장'].includes(grp.location);
+                return (
+                <tr key={i} className={`hover:bg-slate-50/60 ${isFactory ? 'bg-amber-50/30' : ''}`}>
+                  <td className="px-4 py-2 font-medium text-slate-700">{grp.location}{isFactory && <span className="ml-1 text-[9px] text-amber-600">공장</span>}</td>
+                  <td className="px-4 py-2 text-right">
+                    {canWrite && grp.RPO ? <EditableCell value={grp.RPO.qty_kg} onSave={(v) => saveLoc(grp.RPO.id, v)} /> : <span className="tabular-nums">{fmtKgFull(grp.RPO?.qty_kg)}</span>}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {canWrite && grp.RSPO ? <EditableCell value={grp.RSPO.qty_kg} onSave={(v) => saveLoc(grp.RSPO.id, v)} /> : <span className="tabular-nums">{fmtKgFull(grp.RSPO?.qty_kg)}</span>}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-slate-400">{grp.RPO?.as_of_date || grp.RSPO?.as_of_date || '-'}</td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-5 py-2 bg-amber-50/40 text-[11px] text-amber-700">
+          💡 원주·익산·밀양 공장 보유 재고를 입력하면 총 가용재고와 소진일이 자동 재계산됩니다 (현재 0).
+        </div>
+      </div>
+
+      {loading && <p className="text-xs text-slate-400 text-center">계산 중...</p>}
+    </div>
+  );
+};
+
 const InventoryTab = () => {
   const { canWrite } = useAuth();
+  const [mgdView, setMgdView] = useState(false);
   const [subTab, setSubTab] = useState<InventorySubTab>('rbd2026');
   const [inventoryData, setInventoryData] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -2207,6 +2401,9 @@ const InventoryTab = () => {
 
   const subTabs = INVENTORY_SUB_TABS;
 
+  // 관리팜유 투입 시뮬레이터 뷰
+  if (mgdView) return <MgdSimulatorSection onBack={() => setMgdView(false)} />;
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Sub-tabs + Help text */}
@@ -2223,6 +2420,13 @@ const InventoryTab = () => {
               {tab.label}
             </button>
           ))}
+          <button
+            onClick={() => setMgdView(true)}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-all flex items-center gap-1.5"
+            title="관리팜유 투입 시점에 따른 재고 소진 시뮬레이션"
+          >
+            🔄 관리팜유 투입
+          </button>
         </div>
         <div className="flex items-center gap-3">
           {canWrite && autofillData.length > 0 && (
