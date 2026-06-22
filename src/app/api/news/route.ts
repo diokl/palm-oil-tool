@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import Anthropic from '@anthropic-ai/sdk';
+import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
 // Ensure full_content column exists (migration-safe).
 // No-op under PostgreSQL/Supabase: schema is managed out-of-band via schema.sql.
@@ -18,7 +19,7 @@ async function analyzeNewsWithAI(content: string): Promise<{ sentiment: string; 
     const client = new Anthropic({ apiKey });
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 200,
       messages: [{
         role: 'user',
@@ -105,7 +106,7 @@ async function parseBulkNewsWithAI(rawText: string): Promise<Array<{
   const client = new Anthropic({ apiKey });
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: ANTHROPIC_MODEL,
     max_tokens: 16384,
     messages: [{
       role: 'user',

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun } from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
+import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
 // 북마클릿(KoreaPDS 등 본인 로그인 세션)에서 수집한 기사들을 받아 중복을 거르고 저장.
 // - 인증: 토큰(?token= 또는 x-ingest-token 헤더) === NEWS_INGEST_TOKEN
@@ -37,7 +38,7 @@ async function analyzeSentiment(text: string): Promise<{ sentiment: string; impa
   try {
     const client = new Anthropic({ apiKey });
     const res = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 200,
       messages: [{
         role: 'user',

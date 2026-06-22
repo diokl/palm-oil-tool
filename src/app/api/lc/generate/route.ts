@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
 interface SCData {
   contract_number?: string;
@@ -111,7 +112,7 @@ export async function POST(request: NextRequest) {
         });
 
         const response = await client.messages.create({
-          model: 'claude-3-5-sonnet-20241022',
+          model: ANTHROPIC_MODEL,
           max_tokens: 1500,
           messages: [
             {

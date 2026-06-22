@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
 async function parsePdf(buffer: Buffer): Promise<string> {
   const mod = await import('pdf-parse');
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
           : 'No LC data provided for comparison';
 
         const response = await client.messages.create({
-          model: 'claude-3-5-sonnet-20241022',
+          model: ANTHROPIC_MODEL,
           max_tokens: 2000,
           messages: [
             {

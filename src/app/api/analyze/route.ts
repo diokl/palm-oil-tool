@@ -3,6 +3,7 @@ import { dbAll } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import { calculateBoxRange } from '@/lib/box-range';
 import Anthropic from '@anthropic-ai/sdk';
+import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
 export async function POST(request: NextRequest) {
   try {
@@ -101,7 +102,7 @@ monthly_strategy의 각 월에 대해:
 
     const client = new Anthropic({ apiKey });
     const message = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -114,7 +115,7 @@ monthly_strategy의 각 월에 대해:
     const { dbRun } = await import('@/lib/db');
     await dbRun(
       `INSERT INTO analyses (analysis_type, input_data, result, model) VALUES ('market', ?, ?, ?)`,
-      [JSON.stringify({ news_count: recentNews.length }), JSON.stringify(result), 'claude-sonnet-4-20250514']
+      [JSON.stringify({ news_count: recentNews.length }), JSON.stringify(result), ANTHROPIC_MODEL]
     );
 
     return NextResponse.json(result);
