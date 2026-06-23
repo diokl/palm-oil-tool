@@ -1,10 +1,15 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   ComposedChart, Bar, Area, AreaChart, ReferenceLine
 } from 'recharts';
+import {
+  runSim, compareScenariosCore, recommendManaged,
+  sumBaseFromLocations, buildDemandMap, isBusinessDay, ymd,
+  RECO_DEFAULT, type RecoConfig,
+} from '@/lib/mgd-core';
 
 // ============ AUTH CONTEXT ============
 const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrite: false, role: 'user' });
@@ -948,13 +953,12 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         <MetricCard label="RSPO 재고" value={rspo ? `${(rspo.ending_stock / 1000).toFixed(0)}K` : '-'} unit={rspo ? `회전일 ${rspo.coverage_days}일` : ''} />
       </div>
 
-      {/* Main Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 md:gap-6">
-        <div className="lg:col-span-3">
-          {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
-        </div>
-        <div className="lg:col-span-2 space-y-5">
-          {/* AI Analysis — hidden by default, unlocked via easter egg */}
+      {/* 박스권 게이지 — 가로 전체폭 */}
+      <div>
+        {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
+      </div>
+
+      {/* AI Analysis — hidden by default, unlocked via easter egg */}
           {showAI && <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
@@ -1064,43 +1068,44 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
             )}
           </div>}
 
-          {/* 핵심 이슈 */}
-          {data.key_issues && data.key_issues.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                <span className="w-2 h-2 bg-rose-500 rounded-full" />
-                핵심 이슈
-              </h3>
-              <div className="card divide-y divide-slate-100">
-                {data.key_issues.slice(0, 5).map((iss) => {
-                  const sc = iss.sentiment === '강세' ? 'bg-emerald-100 text-emerald-700'
-                    : iss.sentiment === '약세' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600';
-                  return (
-                    <div key={iss.id} className="px-4 py-2.5 flex items-start gap-2.5 hover:bg-slate-50/60">
-                      <span className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded ${sc}`}>{iss.sentiment || '-'}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-slate-700 leading-snug">{iss.content}</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{iss.date}{iss.impact === 'High' && <span className="ml-1.5 text-rose-500">● 중요</span>}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+      {/* 최근 뉴스(왼쪽) · 핵심 이슈(오른쪽) — 같은 칸 2열 배열 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 items-start">
+        {/* Recent News (왼쪽) */}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-slate-700">최근 뉴스</h3>
+          {data.recent_news?.length > 0 ? (
+            data.recent_news.slice(0, 3).map((news) => <NewsCard key={news.id} news={news} />)
+          ) : (
+            <div className="card p-5 text-slate-400 text-sm text-center">
+              뉴스 탭에서 시황 데이터를 입력하세요
             </div>
           )}
-
-          {/* Recent News */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-700">최근 뉴스</h3>
-            {data.recent_news?.length > 0 ? (
-              data.recent_news.slice(0, 3).map((news) => <NewsCard key={news.id} news={news} />)
-            ) : (
-              <div className="card p-5 text-slate-400 text-sm text-center">
-                뉴스 탭에서 시황 데이터를 입력하세요
-              </div>
-            )}
-          </div>
         </div>
+
+        {/* 핵심 이슈 (오른쪽) */}
+        {data.key_issues && data.key_issues.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <span className="w-2 h-2 bg-rose-500 rounded-full" />
+              핵심 이슈
+            </h3>
+            <div className="card divide-y divide-slate-100">
+              {data.key_issues.slice(0, 5).map((iss) => {
+                const sc = iss.sentiment === '강세' ? 'bg-emerald-100 text-emerald-700'
+                  : iss.sentiment === '약세' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600';
+                return (
+                  <div key={iss.id} className="px-4 py-2.5 flex items-start gap-2.5 hover:bg-slate-50/60">
+                    <span className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded ${sc}`}>{iss.sentiment || '-'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-700 leading-snug">{iss.content}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{iss.date}{iss.impact === 'High' && <span className="ml-1.5 text-rose-500">● 중요</span>}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Prebuy Effect Summary — Table Format */}
@@ -2051,45 +2056,120 @@ interface AutofillSuggestion {
 }
 
 // ============ 관리팜유 투입 시뮬레이터 ============
+// 미세조정 유형 → 부호. 롯데웰푸드(−,비차감) / 판매·삼양사·삼양제분(+,차감) / 정제사이송(0,위치이동)
+const ADJ_TYPES: { label: string; sign: -1 | 0 | 1; hint: string }[] = [
+  { label: '롯데웰푸드', sign: -1, hint: '비차감 (외부 완제품 조달 → 소진↓)' },
+  { label: '판매',       sign:  1, hint: '추가 차감 (외부 판매·출고 → 소진↑)' },
+  { label: '삼양사',     sign:  1, hint: '추가 차감 (기준소요 외 추가 출고)' },
+  { label: '삼양제분',   sign:  1, hint: '추가 차감 (기준소요 외 추가 출고)' },
+  { label: '정제사이송', sign:  0, hint: '위치 이동만 (통합 소진 무영향)' },
+  { label: '기타',       sign:  1, hint: '차감(+) / 음수 입력 시 감소(−)' },
+];
+const signOf = (label: string) => (ADJ_TYPES.find(t => t.label === label)?.sign ?? 1);
+
 const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
   const { canWrite } = useAuth();
   const [injectDate, setInjectDate] = useState('2026-07-24');
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<any>(null);   // GET 원시응답: locations/base/demand/adjustments/recoConfig …
   const [loading, setLoading] = useState(false);
+  const [recoCfg, setRecoCfg] = useState<RecoConfig>(RECO_DEFAULT);
+  const tmpId = useRef(-1);                       // optimistic 행 임시 id (음수)
 
-  const fetchSim = async (d: string) => {
-    setLoading(true);
+  // 최초 1회만 로드. 이후 투입일/미세조정 변경은 클라이언트에서 즉시 재계산.
+  const fetchAll = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const res = await fetch(`/api/mgd-simulation?inject_date=${d}`);
-      setData(await res.json());
-    } catch { /* noop */ } finally { setLoading(false); }
-  };
-  useEffect(() => { fetchSim(injectDate); }, [injectDate]);
+      const res = await fetch(`/api/mgd-simulation?inject_date=${injectDate}`);
+      const json = await res.json();
+      setData(json);
+      if (json.recoConfig) setRecoCfg(json.recoConfig);
+    } catch { /* noop */ } finally { if (!silent) setLoading(false); }
+  // injectDate는 재호출 트리거가 아님(클라 재계산) — 최초 1회만.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  const saveLoc = async (id: number, qty: number) => {
-    await fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, qty_kg: qty }) });
-    fetchSim(injectDate);
+  // 단일 진실원천 = data의 원시배열. 편집 시 로컬 갱신 → useMemo가 즉시 재계산.
+  const inputs = useMemo(() => {
+    if (!data) return null;
+    return {
+      base: sumBaseFromLocations(data.locations || []),
+      demand: buildDemandMap(data.demand || []),
+      adjustments: (data.adjustments || []) as any[],
+    };
+  }, [data]);
+  const sim = useMemo(() => inputs ? runSim(injectDate, inputs, recoCfg.committedKg) : null, [inputs, injectDate, recoCfg.committedKg]);
+  const scenarios = useMemo(() => inputs ? compareScenariosCore(inputs, recoCfg.committedKg) : [], [inputs, recoCfg.committedKg]);
+  const recommendation = useMemo(() => inputs ? recommendManaged(inputs, recoCfg) : null, [inputs, recoCfg]);
+
+  // 위치별 재고 — 로컬 즉시 반영 + 백그라운드 저장
+  const saveLoc = (id: number, qty: number) => {
+    setData((d: any) => ({ ...d, locations: (d.locations || []).map((l: any) => l.id === id ? { ...l, qty_kg: qty } : l) }));
+    fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, qty_kg: qty }) }).catch(() => {});
   };
-  // 월별 소요 수정
-  const saveDemand = async (product: string, month: string, monthly_kg: number) => {
-    await fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'demand', product, month, monthly_kg }) });
-    fetchSim(injectDate);
+  const saveDemand = (product: string, month: string, monthly_kg: number) => {
+    setData((d: any) => ({ ...d, demand: (d.demand || []).map((r: any) => (r.product === product && r.month === month) ? { ...r, monthly_kg } : r) }));
+    fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'demand', product, month, monthly_kg }) }).catch(() => {});
   };
-  // 일별 조정 추가/삭제
-  const [adjForm, setAdjForm] = useState({ date: '2026-07-01', product: 'RPO', delta_kg: '', label: '롯데웰푸드' });
+  // 계획 파라미터 — 즉시 반영 + 저장
+  const saveCfg = (key: 'july_cap_kg' | 'committed_kg' | 'coverage_months' | 'lead_months', value: number) => {
+    setRecoCfg((c) => ({
+      ...c,
+      julyCapKg: key === 'july_cap_kg' ? value : c.julyCapKg,
+      committedKg: key === 'committed_kg' ? value : c.committedKg,
+      coverageMonths: key === 'coverage_months' ? value : c.coverageMonths,
+      leadMonths: key === 'lead_months' ? value : c.leadMonths,
+    }));
+    fetch('/api/mgd-simulation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'mgdcfg', key, value }) }).catch(() => {});
+  };
+
+  // 미세조정 입력폼 (날짜 범위 + 유형 + 품목 + 수량톤)
+  const [adjForm, setAdjForm] = useState({ date: '2026-07-01', endDate: '', product: 'RPO', qty: '', label: '롯데웰푸드' });
+  const [selectedAdj, setSelectedAdj] = useState<Set<number>>(new Set());
+
+  // 범위 내 영업일 목록 (주말·공휴일 제외 → 시뮬과 일치)
+  const genDates = (start: string, end: string): string[] => {
+    const out: string[] = [];
+    const s = new Date(start + 'T00:00:00Z');
+    const e = new Date((end || start) + 'T00:00:00Z');
+    if (isNaN(s.getTime()) || isNaN(e.getTime()) || e < s) return out;
+    for (let d = new Date(s); d <= e; d = new Date(d.getTime() + 86400000)) {
+      if (isBusinessDay(d)) out.push(ymd(d));
+    }
+    return out;
+  };
+
   const addAdj = async () => {
-    if (!adjForm.date || !adjForm.delta_kg) return;
-    await fetch('/api/mgd-simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...adjForm, delta_kg: parseFloat(adjForm.delta_kg) }) });
-    setAdjForm({ ...adjForm, delta_kg: '' });
-    fetchSim(injectDate);
+    const dates = genDates(adjForm.date, adjForm.endDate);
+    const q = parseFloat(adjForm.qty);
+    if (dates.length === 0 || !q || isNaN(q)) return;
+    const delta = signOf(adjForm.label) * Math.abs(q) * 1000;   // 톤 → kg, 유형 부호 적용
+    const rows = dates.map(dt => ({ date: dt, product: adjForm.product, delta_kg: delta, label: adjForm.label, note: null }));
+    // optimistic: 임시 음수 id로 즉시 표시
+    const optimistic = rows.map(r => ({ ...r, id: tmpId.current-- }));
+    setData((d: any) => ({ ...d, adjustments: [...optimistic, ...(d.adjustments || [])] }));
+    setAdjForm(f => ({ ...f, qty: '' }));
+    try {
+      await fetch('/api/mgd-simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows }) });
+      fetchAll(true);   // 실제 id로 조용히 동기화
+    } catch { /* noop */ }
   };
-  const delAdj = async (id: number) => {
-    await fetch(`/api/mgd-simulation?adj_id=${id}`, { method: 'DELETE' });
-    fetchSim(injectDate);
+  const delAdj = (id: number) => {
+    setData((d: any) => ({ ...d, adjustments: (d.adjustments || []).filter((a: any) => a.id !== id) }));
+    if (id > 0) fetch(`/api/mgd-simulation?adj_id=${id}`, { method: 'DELETE' }).catch(() => {});
   };
+  const delSelectedAdj = () => {
+    const ids = Array.from(selectedAdj);
+    const realIds = ids.filter(i => i > 0);
+    setData((d: any) => ({ ...d, adjustments: (d.adjustments || []).filter((a: any) => !selectedAdj.has(a.id)) }));
+    setSelectedAdj(new Set());
+    if (realIds.length) fetch(`/api/mgd-simulation?ids=${realIds.join(',')}`, { method: 'DELETE' }).catch(() => {});
+  };
+  const toggleAdj = (id: number) => setSelectedAdj(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const fmtKg = (n: number | null | undefined) => n == null ? '—' : `${(n / 1000).toFixed(0)}톤`;
   const fmtKgFull = (n: number | null | undefined) => n == null ? '—' : Math.round(n).toLocaleString();
+  const fmtTon1 = (n: number | null | undefined) => n == null ? '—' : `${(n / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })}톤`;
   const SCEN = [
     { id: 1, label: '1안', sub: '7/15 투입', date: '2026-07-15' },
     { id: 2, label: '2안', sub: '7/24 투입', date: '2026-07-24' },
@@ -2097,7 +2177,6 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
     { id: 4, label: '4안', sub: '7/1 병행', date: '2026-07-01' },
   ];
 
-  const sim = data?.sim;
   const chartData = (sim?.daily || []).map((p: any) => ({
     date: p.date, label: p.date?.slice(5), RPO: p.rpo, RSPO: p.rspo, 관리팜유: p.mgd, 통합: p.combined,
   }));
@@ -2107,6 +2186,7 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
     monthGrid[d.month][d.product] = d;
   }
   const months = Object.keys(monthGrid).sort();
+  const adjustments = (data?.adjustments || []) as any[];
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -2129,7 +2209,7 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           {SCEN.map(s => {
-            const scen = data?.scenarios?.find((x: any) => x.id === s.id);
+            const scen = scenarios.find((x: any) => x.id === s.id);
             const active = injectDate === s.date;
             return (
               <button key={s.id} onClick={() => setInjectDate(s.date)}
@@ -2164,12 +2244,108 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
           <div className="card p-4">
             <div className="text-xs text-slate-500 mb-1">관리팜유 소진예상일</div>
             <div className="text-xl font-bold text-indigo-600 tabular-nums">{sim.mgd_depletion ?? '—'}</div>
-            <div className="text-[11px] text-slate-400 mt-1">7,500톤 기준</div>
+            <div className="text-[11px] text-slate-400 mt-1">{fmtKg(recoCfg.committedKg)} 기준</div>
           </div>
           <div className="card p-4">
             <div className="text-xs text-slate-500 mb-1">RPO·통합 소진일</div>
             <div className="text-sm font-semibold text-slate-700">RPO {sim.rpo_depletion ?? '—'}</div>
             <div className="text-sm font-semibold text-slate-700">통합 {sim.combined_depletion ?? '—'}</div>
+          </div>
+        </div>
+      )}
+
+      {/* 7월/8월 선적 매입 추천 (상시 3개월 선행소요) */}
+      {recommendation && (
+        <div className="card overflow-hidden border-indigo-100">
+          <div className="px-5 py-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <p className="text-sm font-semibold text-indigo-900">📦 관리팜유 매입 추천 — 상시 3개월 선행소요 유지</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">7월선적 → {recommendation.checkpoints[0]?.month.slice(5)}월 가용 / 8월선적 → {recommendation.checkpoints[1]?.month.slice(5)}월 가용 (리드 {recoCfg.leadMonths}개월). 입고 시점 보유재고가 향후 {recoCfg.coverageMonths}개월 소요 이상이 되도록 산출.</p>
+            </div>
+          </div>
+
+          {/* 계획 파라미터 */}
+          <div className="px-4 py-2.5 flex flex-wrap items-end gap-3 border-b border-slate-100 bg-slate-50/40">
+            <div><label className="text-[10px] text-slate-500 block">7월 선적한도(톤)</label>
+              <input type="number" disabled={!canWrite} value={Math.round(recoCfg.julyCapKg / 1000)}
+                onChange={e => setRecoCfg(c => ({ ...c, julyCapKg: (parseFloat(e.target.value) || 0) * 1000 }))}
+                onBlur={e => saveCfg('july_cap_kg', (parseFloat(e.target.value) || 0) * 1000)}
+                className="w-24 px-2 py-1 border border-slate-200 rounded text-xs bg-white disabled:bg-slate-50" /></div>
+            <div><label className="text-[10px] text-slate-500 block">기확보(톤)</label>
+              <input type="number" disabled={!canWrite} value={Math.round(recoCfg.committedKg / 1000)}
+                onChange={e => setRecoCfg(c => ({ ...c, committedKg: (parseFloat(e.target.value) || 0) * 1000 }))}
+                onBlur={e => saveCfg('committed_kg', (parseFloat(e.target.value) || 0) * 1000)}
+                className="w-24 px-2 py-1 border border-slate-200 rounded text-xs bg-white disabled:bg-slate-50" /></div>
+            <div><label className="text-[10px] text-slate-500 block">선행 개월수</label>
+              <input type="number" disabled={!canWrite} value={recoCfg.coverageMonths}
+                onChange={e => setRecoCfg(c => ({ ...c, coverageMonths: parseFloat(e.target.value) || 0 }))}
+                onBlur={e => saveCfg('coverage_months', parseFloat(e.target.value) || 0)}
+                className="w-16 px-2 py-1 border border-slate-200 rounded text-xs bg-white disabled:bg-slate-50" /></div>
+            <div><label className="text-[10px] text-slate-500 block">리드(개월)</label>
+              <input type="number" disabled={!canWrite} value={recoCfg.leadMonths}
+                onChange={e => setRecoCfg(c => ({ ...c, leadMonths: parseFloat(e.target.value) || 0 }))}
+                onBlur={e => saveCfg('lead_months', parseFloat(e.target.value) || 0)}
+                className="w-16 px-2 py-1 border border-slate-200 rounded text-xs bg-white disabled:bg-slate-50" /></div>
+          </div>
+
+          {/* 선적별 필요량 */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="border-b border-slate-100 text-xs text-slate-500">
+                <th className="px-4 py-2 text-left">입고시점</th>
+                <th className="px-3 py-2 text-left">선적</th>
+                <th className="px-3 py-2 text-right">{recoCfg.coverageMonths}개월 선행소요</th>
+                <th className="px-3 py-2 text-right">도착직전 가용</th>
+                <th className="px-3 py-2 text-right">추천 매입</th>
+              </tr></thead>
+              <tbody className="divide-y divide-slate-50">
+                {recommendation.checkpoints.map((c: any) => (
+                  <tr key={c.shipment} className="hover:bg-slate-50/60">
+                    <td className="px-4 py-2 font-medium text-slate-700">{c.month.slice(5)}월초</td>
+                    <td className="px-3 py-2"><span className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">{c.shipment}</span></td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{fmtTon1(c.coverageNeed)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{fmtTon1(c.availBefore)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums font-bold text-indigo-700">
+                      {fmtTon1(c.buy)}
+                      {c.capped && <span className="ml-1 text-[10px] text-rose-500">한도초과</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 총량 vs 기확보 */}
+          <div className="px-4 py-3 grid grid-cols-3 gap-3 bg-slate-50/40 border-t border-slate-100 text-center">
+            <div>
+              <div className="text-[11px] text-slate-500">총 추천 매입</div>
+              <div className="text-lg font-bold text-indigo-700 tabular-nums">{fmtTon1(recommendation.totalNeed)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500">기확보</div>
+              <div className="text-lg font-bold text-slate-600 tabular-nums">{fmtTon1(recommendation.committedKg)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500">{recommendation.diffVsCommitted < 0 ? '부족' : '여유'}</div>
+              <div className={`text-lg font-bold tabular-nums ${recommendation.diffVsCommitted < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                {recommendation.diffVsCommitted < 0 ? '−' : '+'}{fmtTon1(Math.abs(recommendation.diffVsCommitted))}
+              </div>
+            </div>
+          </div>
+
+          {/* 월별 선행소요 커버리지 추이 */}
+          <div className="px-4 py-2.5 border-t border-slate-100">
+            <p className="text-[11px] text-slate-400 mb-1.5">월별 선행소요 커버리지 (추천 매입 반영, {recoCfg.coverageMonths}개월 미만 = <span className="text-rose-500">부족</span>)</p>
+            <div className="flex flex-wrap gap-1.5">
+              {recommendation.byMonth.map((m: any) => {
+                const ok = m.coverageMonths >= recoCfg.coverageMonths - 0.05;
+                return (
+                  <span key={m.month} className={`text-[11px] px-2 py-1 rounded-lg tabular-nums ${ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>
+                    {m.month.slice(5)}월 {m.coverageMonths.toFixed(1)}M
+                  </span>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -2244,36 +2420,54 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
         </div>
       </div>
 
-      {/* 일별 미세조정 (정제사 이송 / 롯데웰푸드 등) */}
+      {/* 일별 미세조정 — 정제사별 일자별 이동 */}
       <div className="card overflow-hidden">
-        <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
-          <p className="text-sm font-semibold text-slate-700">일별 미세조정</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">특정일 소진 가감. (+)정제사 이송·판매로 소진↑ / (−)롯데웰푸드 제품구매로 자체소비↓ → 소진일 연장</p>
+        <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-slate-700">일별 미세조정 (정제사별 일자별 이동)</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">월 기준소요(삼양사·삼양제분 정상투입)는 이미 차감됨. 여기엔 <b>그 외 가감</b>만: <b className="text-emerald-600">롯데웰푸드(−)</b> 비차감 → 소진↓ / <b className="text-rose-600">판매·추가출고(+)</b> 차감 → 소진↑</p>
+          </div>
+          {selectedAdj.size > 0 && canWrite && (
+            <button onClick={delSelectedAdj} className="px-3 py-1.5 bg-rose-500 text-white rounded text-xs font-medium hover:bg-rose-600">선택 {selectedAdj.size}건 삭제</button>
+          )}
         </div>
         {canWrite && (
           <div className="px-4 py-3 flex flex-wrap items-end gap-2 border-b border-slate-100">
-            <div><label className="text-[10px] text-slate-500 block">날짜</label><input type="date" value={adjForm.date} onChange={e => setAdjForm({ ...adjForm, date: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
+            <div><label className="text-[10px] text-slate-500 block">시작일</label><input type="date" value={adjForm.date} onChange={e => setAdjForm({ ...adjForm, date: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
+            <div><label className="text-[10px] text-slate-500 block">종료일 <span className="text-slate-300">(범위·선택)</span></label><input type="date" value={adjForm.endDate} onChange={e => setAdjForm({ ...adjForm, endDate: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
+            <div><label className="text-[10px] text-slate-500 block">정제사/유형</label>
+              <select value={adjForm.label} onChange={e => setAdjForm({ ...adjForm, label: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white">
+                {ADJ_TYPES.map(t => <option key={t.label} value={t.label}>{t.label}</option>)}
+              </select>
+            </div>
             <div><label className="text-[10px] text-slate-500 block">품목</label>
               <select value={adjForm.product} onChange={e => setAdjForm({ ...adjForm, product: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white"><option>RPO</option><option>RSPO</option></select>
             </div>
-            <div><label className="text-[10px] text-slate-500 block">유형</label>
-              <select value={adjForm.label} onChange={e => setAdjForm({ ...adjForm, label: e.target.value })} className="px-2 py-1 border border-slate-200 rounded text-xs bg-white"><option>롯데웰푸드</option><option>정제사이송</option><option>판매</option><option>기타</option></select>
-            </div>
-            <div><label className="text-[10px] text-slate-500 block">증감(kg, −는 감소)</label><input type="number" value={adjForm.delta_kg} onChange={e => setAdjForm({ ...adjForm, delta_kg: e.target.value })} placeholder="예: -200000" className="w-28 px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
-            <button onClick={addAdj} disabled={!adjForm.delta_kg} className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 disabled:opacity-40">추가</button>
+            <div><label className="text-[10px] text-slate-500 block">수량(톤)</label><input type="number" value={adjForm.qty} onChange={e => setAdjForm({ ...adjForm, qty: e.target.value })} placeholder="예: 200" className="w-24 px-2 py-1 border border-slate-200 rounded text-xs bg-white" /></div>
+            <button onClick={addAdj} disabled={!adjForm.qty} className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 disabled:opacity-40">추가</button>
+            <span className="text-[10px] text-slate-400 pb-1">{ADJ_TYPES.find(t => t.label === adjForm.label)?.hint}{adjForm.endDate && adjForm.endDate >= adjForm.date ? ` · 범위 영업일 ${genDates(adjForm.date, adjForm.endDate).length}일 일괄` : ''}</span>
           </div>
         )}
-        <div className="overflow-x-auto max-h-52 overflow-y-auto">
+        <div className="overflow-x-auto max-h-64 overflow-y-auto">
           <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-white"><tr className="border-b border-slate-100 text-slate-500">
+              {canWrite && <th className="px-3 py-1.5 w-8 text-left"><input type="checkbox" checked={adjustments.length > 0 && selectedAdj.size === adjustments.length} onChange={() => setSelectedAdj(selectedAdj.size === adjustments.length ? new Set() : new Set(adjustments.map((a: any) => a.id)))} /></th>}
+              <th className="px-3 py-1.5 text-left">날짜</th>
+              <th className="px-2 py-1.5 text-left">정제사/유형</th>
+              <th className="px-2 py-1.5 text-left">품목</th>
+              <th className="px-2 py-1.5 text-right">수량(톤)</th>
+              {canWrite && <th className="px-2 py-1.5 w-8"></th>}
+            </tr></thead>
             <tbody className="divide-y divide-slate-50">
-              {(data?.adjustments || []).length === 0 ? (
-                <tr><td className="px-4 py-3 text-slate-400">조정 내역 없음. 위에서 추가하세요.</td></tr>
-              ) : (data?.adjustments || []).map((a: any) => (
-                <tr key={a.id} className="hover:bg-slate-50/60">
-                  <td className="px-4 py-1.5 tabular-nums text-slate-500">{a.date}</td>
-                  <td className="px-2 py-1.5">{a.product}</td>
+              {adjustments.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-3 text-slate-400">조정 내역 없음. 위에서 추가하세요.</td></tr>
+              ) : adjustments.map((a: any) => (
+                <tr key={a.id} className={`hover:bg-slate-50/60 ${selectedAdj.has(a.id) ? 'bg-indigo-50/40' : ''}`}>
+                  {canWrite && <td className="px-3 py-1.5"><input type="checkbox" checked={selectedAdj.has(a.id)} onChange={() => toggleAdj(a.id)} /></td>}
+                  <td className="px-3 py-1.5 tabular-nums text-slate-500">{a.date}</td>
                   <td className="px-2 py-1.5"><span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{a.label}</span></td>
-                  <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${a.delta_kg >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{a.delta_kg >= 0 ? '+' : ''}{Math.round(a.delta_kg).toLocaleString()}</td>
+                  <td className="px-2 py-1.5">{a.product}</td>
+                  <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${a.delta_kg > 0 ? 'text-rose-600' : a.delta_kg < 0 ? 'text-emerald-600' : 'text-slate-400'}`}>{a.delta_kg > 0 ? '+' : ''}{(a.delta_kg / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
                   {canWrite && <td className="px-2 py-1.5 text-right"><button onClick={() => delAdj(a.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>}
                 </tr>
               ))}
@@ -2286,7 +2480,7 @@ const MgdSimulatorSection = ({ onBack }: { onBack: () => void }) => {
       <div className="card overflow-hidden">
         <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <p className="text-sm font-semibold text-slate-700">위치별 재고 (총 가용재고)</p>
-          <span className="text-xs text-slate-400">RPO {fmtKgFull(data?.base?.rpo)} · RSPO {fmtKgFull(data?.base?.rspo)} kg</span>
+          <span className="text-xs text-slate-400">RPO {fmtKgFull(inputs?.base?.rpo)} · RSPO {fmtKgFull(inputs?.base?.rspo)} kg</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
