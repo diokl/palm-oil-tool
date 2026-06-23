@@ -1068,8 +1068,8 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
             )}
           </div>}
 
-      {/* 최근 뉴스(왼쪽) · 핵심 이슈(오른쪽) — 같은 칸 2열 배열 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 items-start">
+      {/* 최근 뉴스(왼쪽) · 핵심 이슈(오른쪽) — 같은 칸 2열, 높이 동일(stretch) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 items-stretch">
         {/* Recent News (왼쪽) */}
         <div className="space-y-3">
           <h3 className="text-sm font-semibold text-slate-700">최근 뉴스</h3>
@@ -1082,14 +1082,14 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
           )}
         </div>
 
-        {/* 핵심 이슈 (오른쪽) */}
+        {/* 핵심 이슈 (오른쪽) — 카드를 칸 높이에 맞춰 늘림 */}
         {data.key_issues && data.key_issues.length > 0 && (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
               <span className="w-2 h-2 bg-rose-500 rounded-full" />
               핵심 이슈
             </h3>
-            <div className="card divide-y divide-slate-100">
+            <div className="card divide-y divide-slate-100 flex-1">
               {data.key_issues.slice(0, 5).map((iss) => {
                 const sc = iss.sentiment === '강세' ? 'bg-emerald-100 text-emerald-700'
                   : iss.sentiment === '약세' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600';
