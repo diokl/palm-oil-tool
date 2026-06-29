@@ -144,7 +144,7 @@ export async function generateAlerts(): Promise<Alert[]> {
           recommended_shipment: null,
           current_price: null,
           box_range_zone: null,
-          message: `${product} 재고회전일 ${currentRow.coverage_days}일 -- 추가 구매 검토 필요`,
+          message: `${product} 재고회전 ${currentRow.coverage_days}개월 -- 추가 구매 검토 필요`,
           action_taken: null,
           is_active: true,
         });

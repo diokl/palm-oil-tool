@@ -894,7 +894,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
     if ((x.ending_stock ?? 0) <= 0 && x.upcoming) {
       return `${x.upcoming.month}월 ${fmtStock(x.upcoming.ending_stock)} 통관예정`;
     }
-    return `${x.year}-${String(x.month).padStart(2, '0')} · 회전일 ${x.coverage_days ?? '-'}일`;
+    return `${x.year}-${String(x.month).padStart(2, '0')} · 회전 ${x.coverage_days ?? '-'}개월`;
   };
 
   return (
@@ -2818,7 +2818,7 @@ const InventoryTab = () => {
                     <span className="ml-1 text-blue-400">✎</span>
                   </th>
                   <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">기말재고(kg)</th>
-                  <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">재고회전일</th>
+                  <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">재고회전(개월)</th>
                   <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
                     계약단가
                     <span className="ml-1 text-blue-400">✎</span>
