@@ -54,6 +54,7 @@ interface InventorySummaryItem {
   month: number;
   ending_stock: number;
   coverage_days: number;
+  upcoming?: { year: number; month: number; ending_stock: number } | null;
 }
 
 interface BoxRangeItem {
@@ -874,7 +875,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
     return (
       <div className="space-y-6 animate-fade-in">
         <Shimmer className="h-20" />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">{[...Array(4)].map((_, i) => <Shimmer key={i} className="h-28" />)}</div>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">{[...Array(5)].map((_, i) => <Shimmer key={i} className="h-28" />)}</div>
         <Shimmer className="h-80" />
       </div>
     );
@@ -885,6 +886,16 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
   const latestFCPO = data.fcpo_latest?.find(f => f.contract_month === '2026-04') || data.fcpo_latest?.[0];
   const rbd = data.inventory_summary?.find((x) => x.product === 'RBD');
   const rspo = data.inventory_summary?.find((x) => x.product === 'RSPO');
+  const managed = data.inventory_summary?.find((x) => x.product === 'MANAGED');
+  const fmtStock = (kg: number | null | undefined) => kg == null ? '-' : `${(kg / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}톤`;
+  const stockUnit = (x: any) => {
+    if (!x) return '';
+    // 현재 재고 0인데 임박 입고가 있으면(관리팜유 7월 통관 등) 안내
+    if ((x.ending_stock ?? 0) <= 0 && x.upcoming) {
+      return `${x.upcoming.month}월 ${fmtStock(x.upcoming.ending_stock)} 통관예정`;
+    }
+    return `${x.year}-${String(x.month).padStart(2, '0')} · 회전일 ${x.coverage_days ?? '-'}일`;
+  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -923,7 +934,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
       </p>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
         <MetricCard label="FCPO 시황 (USD)" value={formatPrice(latestFCPO?.settlement_usd)} unit={`기준일: ${data.fcpo_latest_date || '-'}`} />
         <div className="card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between mb-1">
@@ -949,8 +960,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
           }`}>{selectedBoxRange?.zone || '-'}</p>
           <p className="text-[11px] text-slate-400 mt-1">{selectedBoxRange?.contract_month || ''} 기준</p>
         </div>
-        <MetricCard label="RBD 재고" value={rbd ? `${(rbd.ending_stock / 1000).toFixed(0)}K` : '-'} unit={rbd ? `회전일 ${rbd.coverage_days}일` : ''} />
-        <MetricCard label="RSPO 재고" value={rspo ? `${(rspo.ending_stock / 1000).toFixed(0)}K` : '-'} unit={rspo ? `회전일 ${rspo.coverage_days}일` : ''} />
+        <MetricCard label="RBD 재고" value={fmtStock(rbd?.ending_stock)} unit={stockUnit(rbd)} />
+        <MetricCard label="RSPO 재고" value={fmtStock(rspo?.ending_stock)} unit={stockUnit(rspo)} />
+        <MetricCard label="관리팜유 재고" value={fmtStock(managed?.ending_stock)} unit={stockUnit(managed)} />
       </div>
 
       {/* 박스권 게이지 — 가로 전체폭 */}

@@ -38,15 +38,34 @@ export async function GET() {
       );
     }
 
-    // Inventory summary (current year, latest month with data)
-    // MANAGED 포함 — 26년 7월부터 통관 시작하는 관리팜유
-    const inventorySummary = await dbAll(
+    // Inventory summary — 재고관리 탭의 각 제품 최신 기말재고(KG)를 그대로 반영.
+    // 고정 월 대신: 각 제품별로 '현재월 이하에서 기말재고가 있는 최신 월'을 선택.
+    // (MANAGED는 7월 통관 시작이라 현재월 이하 데이터가 없으면 최초 운영월로 폴백)
+    const now = new Date();
+    const cutoff = now.getUTCFullYear() * 12 + (now.getUTCMonth() + 1); // 현재 year*12+month
+    const invRows = await dbAll(
       `SELECT product, year, month, ending_stock, coverage_days
        FROM inventory
        WHERE product IN ('RBD', 'RSPO', 'MANAGED')
-         AND year = 2026 AND month = 4
-       ORDER BY product`
-    );
+         AND ending_stock IS NOT NULL
+       ORDER BY product, year, month`
+    ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number }[];
+    const byProduct: Record<string, typeof invRows> = {};
+    for (const r of invRows) (byProduct[r.product] ??= []).push(r);
+    const inventorySummary = ['RBD', 'RSPO', 'MANAGED'].map((prod) => {
+      const rows = byProduct[prod];
+      if (!rows || rows.length === 0) return null;
+      const past = rows.filter((r) => r.year * 12 + r.month <= cutoff);
+      // 현재월 이하 최신, 없으면(미시작 제품) 가장 이른 운영월
+      const pick = past.length ? past[past.length - 1] : rows[0];
+      // 현재 재고가 0이면 임박한 입고(미래 첫 비-0 월)를 힌트로 — 관리팜유 7월 통관 등
+      let upcoming: { year: number; month: number; ending_stock: number } | null = null;
+      if ((pick.ending_stock ?? 0) <= 0) {
+        const future = rows.find((r) => r.year * 12 + r.month > cutoff && r.ending_stock > 0);
+        if (future) upcoming = { year: future.year, month: future.month, ending_stock: future.ending_stock };
+      }
+      return { ...pick, upcoming };
+    }).filter(Boolean);
 
     // Box range for all contract months with sufficient data (>=10 price points)
     const activeMonths = await dbAll(
