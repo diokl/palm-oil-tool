@@ -44,12 +44,12 @@ export async function GET() {
     const now = new Date();
     const cutoff = now.getUTCFullYear() * 12 + (now.getUTCMonth() + 1); // 현재 year*12+month
     const invRows = await dbAll(
-      `SELECT product, year, month, ending_stock, coverage_days
+      `SELECT product, year, month, ending_stock, coverage_days, customs_volume
        FROM inventory
        WHERE product IN ('RBD', 'RSPO', 'MANAGED')
          AND ending_stock IS NOT NULL
        ORDER BY product, year, month`
-    ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number }[];
+    ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number; customs_volume: number }[];
     const byProduct: Record<string, typeof invRows> = {};
     for (const r of invRows) (byProduct[r.product] ??= []).push(r);
     const inventorySummary = ['RBD', 'RSPO', 'MANAGED'].map((prod) => {
@@ -58,11 +58,16 @@ export async function GET() {
       const past = rows.filter((r) => r.year * 12 + r.month <= cutoff);
       // 현재월 이하 최신, 없으면(미시작 제품) 가장 이른 운영월
       const pick = past.length ? past[past.length - 1] : rows[0];
-      // 현재 재고가 0이면 임박한 입고(미래 첫 비-0 월)를 힌트로 — 관리팜유 7월 통관 등
-      let upcoming: { year: number; month: number; ending_stock: number } | null = null;
+      // 현재 재고가 0이면 임박한 통관 예정량을 힌트로 — 관리팜유 7월 7,500톤 등
+      // (기말재고가 아니라 '앞으로 들어올 통관량 합계'를 표시)
+      let upcoming: { year: number; month: number; customs_total: number } | null = null;
       if ((pick.ending_stock ?? 0) <= 0) {
-        const future = rows.find((r) => r.year * 12 + r.month > cutoff && r.ending_stock > 0);
-        if (future) upcoming = { year: future.year, month: future.month, ending_stock: future.ending_stock };
+        const futureCustoms = rows.filter((r) => r.year * 12 + r.month > cutoff && (r.customs_volume ?? 0) > 0);
+        if (futureCustoms.length) {
+          const customsTotal = futureCustoms.reduce((s, r) => s + Number(r.customs_volume || 0), 0);
+          const first = futureCustoms[0];
+          upcoming = { year: first.year, month: first.month, customs_total: customsTotal };
+        }
       }
       return { ...pick, upcoming };
     }).filter(Boolean);

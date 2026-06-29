@@ -54,7 +54,7 @@ interface InventorySummaryItem {
   month: number;
   ending_stock: number;
   coverage_days: number;
-  upcoming?: { year: number; month: number; ending_stock: number } | null;
+  upcoming?: { year: number; month: number; customs_total: number } | null;
 }
 
 interface BoxRangeItem {
@@ -890,9 +890,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
   const fmtStock = (kg: number | null | undefined) => kg == null ? '-' : `${(kg / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}톤`;
   const stockUnit = (x: any) => {
     if (!x) return '';
-    // 현재 재고 0인데 임박 입고가 있으면(관리팜유 7월 통관 등) 안내
+    // 현재 재고 0인데 임박 통관이 있으면(관리팜유 7월 7,500톤 등) 안내
     if ((x.ending_stock ?? 0) <= 0 && x.upcoming) {
-      return `${x.upcoming.month}월 ${fmtStock(x.upcoming.ending_stock)} 통관예정`;
+      return `${x.upcoming.month}월 ${fmtStock(x.upcoming.customs_total)} 통관예정`;
     }
     return `${x.year}-${String(x.month).padStart(2, '0')} · 회전 ${x.coverage_days ?? '-'}개월`;
   };
