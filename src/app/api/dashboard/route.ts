@@ -5,6 +5,7 @@ import { generateAlerts } from '@/lib/inventory-calc';
 import { calculateBoxRange } from '@/lib/box-range';
 import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
 import { getOilSpread } from '@/lib/oil-spread';
+import { getSupplyDemand } from '@/lib/supply-demand';
 import type { Product } from '@/lib/types';
 
 export async function GET() {
@@ -119,11 +120,19 @@ export async function GET() {
         `SELECT category, item_name, year, month, value, value_rm
          FROM mpob_data
          WHERE year IN (2024, 2025, 2026)
-           AND item_name IN ('RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN', 'PFAD', 'MALAYSIA', 'TOTAL')
+           AND item_name IN ('RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN', 'PFAD', 'MALAYSIA', 'TOTAL', 'TOTAL PALM OIL', 'PALM OIL')
          ORDER BY category, item_name, year, month`
       );
     } catch (e: any) {
       console.warn('MPOB summary skipped:', e.message);
+    }
+
+    // 수급 밸런스 요약 (재고/수출 비율, 회귀 적정가) — best-effort
+    let supplyDemand: any = null;
+    try {
+      supplyDemand = (await getSupplyDemand()).summary;
+    } catch (e: any) {
+      console.warn('Supply-demand summary skipped:', e.message);
     }
 
     // Latest AI analysis
@@ -211,6 +220,7 @@ export async function GET() {
       inventory_summary: inventorySummary,
       box_ranges: boxRanges,
       mpob_summary: mpobSummary,
+      supply_demand: supplyDemand,
       recent_purchases: recentPurchases,
       recent_news: recentNews,
       ai_analysis: latestAnalysis?.result ? JSON.parse(latestAnalysis.result) : null,

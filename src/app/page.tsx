@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  ComposedChart, Bar, Area, AreaChart, ReferenceLine
+  ComposedChart, Bar, Area, AreaChart, ReferenceLine, ScatterChart, Scatter
 } from 'recharts';
 import {
   runSim, compareScenariosCore, recommendManaged,
@@ -88,6 +88,17 @@ interface MpobSummaryRow {
   value_rm: number | null;
 }
 
+// 수급 밸런스 요약 (/api/supply-demand summary, 대시보드에도 포함)
+interface SupplyDemandSummary {
+  latest: any | null;
+  stock_percentile: number | null;
+  ratio_percentile: number | null;
+  ratio_avg: number | null;
+  regression: { n: number; slope: number; intercept: number; r: number; fair_price: number | null; deviation_pct: number | null } | null;
+  months: number;
+  signal: string;
+}
+
 interface DashboardData {
   alerts: DashboardAlert[];
   fcpo_latest: FCPOLatest[];
@@ -95,6 +106,7 @@ interface DashboardData {
   inventory_summary: InventorySummaryItem[];
   box_ranges: BoxRangeItem[];
   mpob_summary: MpobSummaryRow[];
+  supply_demand?: SupplyDemandSummary | null;
   recent_purchases: RecentPurchaseItem[];
   recent_news: NewsItem[];
   key_issues?: NewsItem[];
@@ -1140,7 +1152,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
       {data.oil_spread && <OilSpreadWidget data={data.oil_spread} onNavigate={onNavigate} />}
 
       {/* MPOB 시그널 — 재고/생산/수출 3 KPI 카드 + 자동 인사이트 */}
-      {data.mpob_summary && data.mpob_summary.length > 0 && <MpobSignalCards rows={data.mpob_summary} onNavigate={onNavigate} />}
+      {data.mpob_summary && data.mpob_summary.length > 0 && <MpobSignalCards rows={data.mpob_summary} sd={data.supply_demand ?? null} onNavigate={onNavigate} />}
     </div>
   );
 };
@@ -1239,15 +1251,15 @@ const OilSpreadWidget = ({ data, onNavigate }: {
 // ============ MPOB SIGNAL CARDS ============
 // 재고/생산/수출 3개 카테고리의 RBD 3종 합계를 YoY 와 함께 표시 + 룰 기반 자동 시그널 메시지
 
-const MpobSignalCards = ({ rows, onNavigate }: { rows: MpobSummaryRow[]; onNavigate?: (tab: Tab) => void }) => {
+const MpobSignalCards = ({ rows, sd, onNavigate }: { rows: MpobSummaryRow[]; sd?: SupplyDemandSummary | null; onNavigate?: (tab: Tab) => void }) => {
   // RBD 3종만 (RBD PALM OIL + OLEIN + STEARIN) 합산 — 말레이시아 정제팜유 합계로 시장 시그널 잡기
   const ITEMS = ['RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN'];
 
   // 카테고리별 최신월 합계 + 전년 동월 합계
-  function aggregate(category: string) {
-    const byYearMonth = new Map<string, number>(); // 'YYYY-MM' → sum of 3 items
+  function aggregate(category: string, items: string[] = ITEMS) {
+    const byYearMonth = new Map<string, number>(); // 'YYYY-MM' → sum of items
     for (const r of rows) {
-      if (r.category !== category || !ITEMS.includes(r.item_name) || r.value == null) continue;
+      if (r.category !== category || !items.includes(r.item_name) || r.value == null) continue;
       const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
       byYearMonth.set(key, (byYearMonth.get(key) || 0) + Number(r.value));
     }
@@ -1262,10 +1274,17 @@ const MpobSignalCards = ({ rows, onNavigate }: { rows: MpobSummaryRow[]; onNavig
     return { latestKey, latestValue, prevValue, yoy };
   }
 
-  const stock = aggregate('stock');
-  const production = aggregate('production');
-  // 수출은 'MALAYSIA' 단일 항목 (port 카테고리에서)
-  const exportAgg = (() => {
+  // 헤드라인(팜유 총재고·CPO 생산·팜유 수출)이 있으면 우선 사용, 없으면 정제유 RBD 3종 합계로 폴백
+  const headlineStock = aggregate('closing_stock', ['TOTAL PALM OIL']);
+  const stock = headlineStock ?? aggregate('stock');
+  const stockLabel = headlineStock ? '말레이시아 팜유 총재고 (MPOB)' : 'RBD 3종 합계';
+  const headlineProd = aggregate('cpo_production', ['MALAYSIA']);
+  const production = headlineProd ?? aggregate('production');
+  const productionLabel = headlineProd ? 'CPO 생산 (MPOB)' : 'RBD 3종 합계';
+  const headlineExport = aggregate('export_product', ['PALM OIL']);
+  const exportLabel = headlineExport ? '팜유 수출 (MPOB)' : '말레이시아 전체';
+  // 수출 폴백은 'MALAYSIA' 단일 항목 (port 카테고리에서)
+  const exportAgg = headlineExport ?? (() => {
     const byKey = new Map<string, number>();
     for (const r of rows) {
       if (r.category !== 'export_port' || r.item_name !== 'MALAYSIA' || r.value == null) continue;
@@ -1371,7 +1390,7 @@ const MpobSignalCards = ({ rows, onNavigate }: { rows: MpobSummaryRow[]; onNavig
             </span>
           </div>
           <div className="text-2xl font-bold text-slate-800 tabular-nums">{fmtT(stock?.latestValue)}<span className="text-sm font-normal text-slate-400 ml-1">톤</span></div>
-          <div className="text-[11px] text-slate-500 mt-1">RBD 3종 합계</div>
+          <div className="text-[11px] text-slate-500 mt-1">{stockLabel}</div>
           <div className={`text-xs font-medium mt-2 ${colorClass(stock?.yoy ?? null, true)}`}>{statusLabel(stock?.yoy ?? null, 'stock')}</div>
         </div>
 
@@ -1384,7 +1403,7 @@ const MpobSignalCards = ({ rows, onNavigate }: { rows: MpobSummaryRow[]; onNavig
             </span>
           </div>
           <div className="text-2xl font-bold text-slate-800 tabular-nums">{fmtT(production?.latestValue)}<span className="text-sm font-normal text-slate-400 ml-1">톤</span></div>
-          <div className="text-[11px] text-slate-500 mt-1">RBD 3종 합계</div>
+          <div className="text-[11px] text-slate-500 mt-1">{productionLabel}</div>
           <div className={`text-xs font-medium mt-2 ${colorClass(production?.yoy ?? null)}`}>{statusLabel(production?.yoy ?? null, 'production')}</div>
         </div>
 
@@ -1397,10 +1416,28 @@ const MpobSignalCards = ({ rows, onNavigate }: { rows: MpobSummaryRow[]; onNavig
             </span>
           </div>
           <div className="text-2xl font-bold text-slate-800 tabular-nums">{fmtT(exportAgg?.latestValue)}<span className="text-sm font-normal text-slate-400 ml-1">톤</span></div>
-          <div className="text-[11px] text-slate-500 mt-1">말레이시아 전체</div>
+          <div className="text-[11px] text-slate-500 mt-1">{exportLabel}</div>
           <div className={`text-xs font-medium mt-2 ${colorClass(exportAgg?.yoy ?? null)}`}>{statusLabel(exportAgg?.yoy ?? null, 'export')}</div>
         </div>
       </div>
+
+      {/* 수급 밸런스 한 줄 (재고/수출 비율 · 재고 백분위 · 회귀 적정가) */}
+      {sd?.latest && (
+        <div className="card p-3 mb-3 bg-sky-50/40 border-sky-100">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
+            <span className="font-semibold text-slate-800">⚖️ 수급 밸런스 ({sd.latest.ym})</span>
+            <span>재고/수출 <b className="tabular-nums">{sd.latest.stock_export_ratio != null ? sd.latest.stock_export_ratio.toFixed(2) : '-'}</b>개월 <span className="text-slate-400">(평균 {sd.ratio_avg != null ? sd.ratio_avg.toFixed(2) : '-'})</span></span>
+            <span>재고 백분위 <b className="tabular-nums">{sd.stock_percentile ?? '-'}%</b></span>
+            {sd.regression?.fair_price != null && (
+              <span>수급 적정가 <b className="tabular-nums">${formatNumber(sd.regression.fair_price, 0)}</b>{' '}
+                <span className={`font-semibold ${(sd.regression.deviation_pct ?? 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>({(sd.regression.deviation_pct ?? 0) > 0 ? '+' : ''}{sd.regression.deviation_pct}%)</span>
+              </span>
+            )}
+            {onNavigate && <button onClick={() => onNavigate('mpob')} className="ml-auto text-blue-600 hover:underline">수급 상세 →</button>}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1">{sd.signal}</p>
+        </div>
+      )}
 
       {/* 자동 시그널 메시지 */}
       <div className="card p-3 bg-amber-50/40 border-amber-100">
@@ -5578,17 +5615,180 @@ const DocVerifyTab = () => {
 
 // ============ MPOB TAB ============
 
-type MpobSubTab = 'stock' | 'production' | 'export_port' | 'export_product' | 'all';
+type MpobSubTab = 'balance' | 'closing_stock' | 'cpo_production' | 'stock' | 'production' | 'export_port' | 'export_product' | 'all';
 
 const MPOB_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const MPOB_CATEGORIES: { id: MpobSubTab; label: string; aggType: 'average' | 'total' }[] = [
-  { id: 'stock', label: 'Stock (재고)', aggType: 'average' },
+  { id: 'balance', label: '⚖️ 수급 밸런스', aggType: 'total' },
+  { id: 'closing_stock', label: 'Closing Stock (총재고)', aggType: 'average' },
+  { id: 'cpo_production', label: 'CPO Production', aggType: 'total' },
+  { id: 'stock', label: 'Stock (정제유 재고)', aggType: 'average' },
   { id: 'production', label: 'Production (생산)', aggType: 'total' },
   { id: 'export_port', label: 'Export by Port', aggType: 'total' },
   { id: 'export_product', label: 'Export by Product', aggType: 'total' },
   { id: 'all', label: '전체 보기', aggType: 'total' },
 ];
+
+// ============ 수급 밸런스 패널 (MPOB 탭) ============
+// 총재고 · 재고/수출 비율 · CPO 생산 · 팜유 수출 + FCPO 월평균 가격과의 관계(산점도·회귀)
+const SupplyDemandPanel = () => {
+  const [sd, setSd] = useState<{ series: any[]; summary: SupplyDemandSummary } | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch('/api/supply-demand'); const j = await r.json(); if (!j.error) setSd(j); }
+      catch (e) { console.error('supply-demand fetch failed', e); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  if (loading) return <div className="space-y-4">{[...Array(2)].map((_, i) => <Shimmer key={i} className="h-60" />)}</div>;
+  if (!sd || !sd.series?.length) {
+    return (
+      <div className="card p-8 text-center">
+        <p className="text-slate-500 text-sm">헤드라인 수급 데이터(총재고·CPO 생산·팜유 수출)가 없습니다.</p>
+        <p className="text-slate-400 text-xs mt-1">상단 'MPOB 자동 가져오기'(당해) 또는 '과거 백필'(2022~)을 실행하세요.</p>
+      </div>
+    );
+  }
+  const s = sd.summary;
+  const latest = s.latest;
+  const fmtK = (n: number | null | undefined) => n == null ? '-' : `${Math.round(n / 1000).toLocaleString()}K`;
+  const fmtPct = (n: number | null | undefined) => n == null ? '' : `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
+  const yoyCls = (n: number | null | undefined, inverse = false) => n == null ? 'text-slate-400' : (n >= 0) !== inverse ? 'text-emerald-600' : 'text-rose-600';
+  const chart = sd.series.slice(-36).map((p: any) => ({
+    ym: p.ym,
+    stock_k: p.closing_stock != null ? Math.round(p.closing_stock / 1000) : null,
+    prod_k: p.production != null ? Math.round(p.production / 1000) : null,
+    exp_k: p.export != null ? Math.round(p.export / 1000) : null,
+    ratio: p.stock_export_ratio,
+    price: p.price_usd,
+  }));
+  const scatter = sd.series.filter((p: any) => p.stock_export_ratio != null && p.price_usd != null).map((p: any) => ({ x: p.stock_export_ratio, y: p.price_usd, ym: p.ym }));
+  const latestPt = latest?.stock_export_ratio != null && latest?.price_usd != null ? [{ x: latest.stock_export_ratio, y: latest.price_usd, ym: latest.ym }] : [];
+  const reg = s.regression;
+  const regLine = reg && scatter.length ? (() => {
+    const xs = scatter.map((p: any) => p.x); const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    return [{ x: x0, y: reg.intercept + reg.slope * x0 }, { x: x1, y: reg.intercept + reg.slope * x1 }];
+  })() : [];
+  const table = sd.series.slice(-24).reverse();
+
+  return (
+    <div className="space-y-4">
+      {/* KPI */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-500">📦 팜유 총재고 ({latest?.ym})</span><span className={`text-xs font-semibold ${yoyCls(latest?.stock_yoy, true)}`}>{fmtPct(latest?.stock_yoy)}</span></div>
+          <div className="text-2xl font-bold text-slate-800 tabular-nums">{fmtK(latest?.closing_stock)}<span className="text-sm font-normal text-slate-400 ml-1">톤</span></div>
+          <div className="text-[11px] text-slate-500 mt-1">전 기간 백분위 <b>{s.stock_percentile ?? '-'}%</b> {s.stock_percentile != null && (s.stock_percentile >= 80 ? '· 고점권' : s.stock_percentile <= 20 ? '· 저점권' : '')}</div>
+        </div>
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-500">⚖️ 재고/수출 비율</span><span className="text-xs text-slate-400">백분위 {s.ratio_percentile ?? '-'}%</span></div>
+          <div className="text-2xl font-bold text-slate-800 tabular-nums">{latest?.stock_export_ratio != null ? latest.stock_export_ratio.toFixed(2) : '-'}<span className="text-sm font-normal text-slate-400 ml-1">개월</span></div>
+          <div className="text-[11px] text-slate-500 mt-1">전 기간 평균 {s.ratio_avg != null ? s.ratio_avg.toFixed(2) : '-'}개월 · 추정 재고/소비 {latest?.stock_use_ratio != null ? latest.stock_use_ratio.toFixed(2) : '-'}</div>
+        </div>
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-500">🏭 CPO 생산</span><span className={`text-xs font-semibold ${yoyCls(latest?.production_yoy)}`}>{fmtPct(latest?.production_yoy)}</span></div>
+          <div className="text-2xl font-bold text-slate-800 tabular-nums">{fmtK(latest?.production)}<span className="text-sm font-normal text-slate-400 ml-1">톤</span></div>
+          <div className="text-[11px] text-slate-500 mt-1">말레이시아 전체 (MPOB)</div>
+        </div>
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-500">🚢 팜유 수출</span><span className={`text-xs font-semibold ${yoyCls(latest?.export_yoy)}`}>{fmtPct(latest?.export_yoy)}</span></div>
+          <div className="text-2xl font-bold text-slate-800 tabular-nums">{fmtK(latest?.export)}<span className="text-sm font-normal text-slate-400 ml-1">톤</span></div>
+          <div className="text-[11px] text-slate-500 mt-1">추정 내수 {fmtK(latest?.implied_domestic)} (수입 제외, 참고)</div>
+        </div>
+      </div>
+
+      {/* 해석 */}
+      <div className="card p-3 bg-sky-50/40 border-sky-100">
+        <p className="text-xs text-slate-700 leading-relaxed">💡 {s.signal}</p>
+        {reg && <p className="text-[11px] text-slate-500 mt-1">회귀(가격 = {reg.intercept} {reg.slope >= 0 ? '+' : '−'} {Math.abs(reg.slope)} × 재고/수출비율, n={reg.n}, r={reg.r}) — 수급 단일 변수 설명이라 참고용입니다. 인니 정책·대두유·원유 변수는 별도.</p>}
+      </div>
+
+      {/* 차트 1: 총재고 vs FCPO 월평균 */}
+      <div className="card p-4">
+        <p className="text-xs font-semibold text-slate-600 mb-2">팜유 총재고(천톤) vs FCPO 최근월 월평균(USD/MT) — 최근 36개월</p>
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={chart}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="ym" tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="l" tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+            <Tooltip />
+            <Legend />
+            <Bar yAxisId="l" dataKey="stock_k" name="총재고(천톤)" fill="#93c5fd" />
+            <Line yAxisId="r" type="monotone" dataKey="price" name="FCPO 월평균($)" stroke="#dc2626" strokeWidth={2} dot={false} connectNulls />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* 차트 2: 생산·수출 + 재고/수출 비율 */}
+      <div className="card p-4">
+        <p className="text-xs font-semibold text-slate-600 mb-2">CPO 생산·팜유 수출(천톤) + 재고/수출 비율(개월)</p>
+        <ResponsiveContainer width="100%" height={240}>
+          <ComposedChart data={chart}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="ym" tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="l" tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} domain={[0, 'auto']} />
+            <Tooltip />
+            <Legend />
+            <Bar yAxisId="l" dataKey="prod_k" name="CPO 생산" fill="#a7f3d0" />
+            <Bar yAxisId="l" dataKey="exp_k" name="팜유 수출" fill="#fde68a" />
+            <Line yAxisId="r" type="monotone" dataKey="ratio" name="재고/수출(개월)" stroke="#7c3aed" strokeWidth={2} dot={false} connectNulls />
+            {s.ratio_avg != null && <ReferenceLine yAxisId="r" y={s.ratio_avg} stroke="#7c3aed" strokeDasharray="4 4" label={{ value: `평균 ${s.ratio_avg.toFixed(2)}`, fontSize: 10, fill: '#7c3aed', position: 'insideTopRight' }} />}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* 산점도: 비율 vs 가격 */}
+      {scatter.length >= 6 && (
+        <div className="card p-4">
+          <p className="text-xs font-semibold text-slate-600 mb-2">재고/수출 비율 vs FCPO 월평균 — 빨간 점 = 최신 월{reg ? ', 점선 = 회귀선' : ''}</p>
+          <ResponsiveContainer width="100%" height={260}>
+            <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis type="number" dataKey="x" name="재고/수출(개월)" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+              <YAxis type="number" dataKey="y" name="FCPO($)" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+              <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={(v: any, n: any) => [typeof v === 'number' ? v.toFixed(2) : v, n]} labelFormatter={() => ''} />
+              <Scatter name="월별" data={scatter} fill="#94a3b8" />
+              {regLine.length === 2 && <Scatter name="회귀선" data={regLine} fill="none" line={{ stroke: '#7c3aed', strokeDasharray: '4 4' }} shape={() => <g />} />}
+              <Scatter name="최신" data={latestPt} fill="#dc2626" />
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* 표 */}
+      <div className="card overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200"><p className="text-xs font-semibold text-slate-600">월별 수급표 (최근 24개월, 톤)</p></div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500">
+              <th className="px-3 py-2 text-left">월</th><th className="px-3 py-2 text-right">기초재고</th><th className="px-3 py-2 text-right">CPO 생산</th><th className="px-3 py-2 text-right">수출</th><th className="px-3 py-2 text-right">추정내수</th><th className="px-3 py-2 text-right">기말재고</th><th className="px-3 py-2 text-right">재고YoY</th><th className="px-3 py-2 text-right">재고/수출</th><th className="px-3 py-2 text-right">FCPO 월평균</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {table.map((p: any) => (
+                <tr key={p.ym} className="hover:bg-slate-50/60 tabular-nums">
+                  <td className="px-3 py-1.5 font-medium text-slate-700">{p.ym}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{p.opening_stock != null ? formatNumber(p.opening_stock) : '-'}</td>
+                  <td className="px-3 py-1.5 text-right">{p.production != null ? formatNumber(p.production) : '-'}</td>
+                  <td className="px-3 py-1.5 text-right">{p.export != null ? formatNumber(p.export) : '-'}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{p.implied_domestic != null ? formatNumber(p.implied_domestic) : '-'}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold">{p.closing_stock != null ? formatNumber(p.closing_stock) : '-'}</td>
+                  <td className={`px-3 py-1.5 text-right ${yoyCls(p.stock_yoy, true)}`}>{fmtPct(p.stock_yoy) || '-'}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold text-violet-700">{p.stock_export_ratio != null ? p.stock_export_ratio.toFixed(2) : '-'}</td>
+                  <td className="px-3 py-1.5 text-right text-rose-600">{p.price_usd != null ? `$${formatNumber(p.price_usd, 1)}` : '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 interface MpobRow {
   item_name: string;
@@ -5616,8 +5816,8 @@ const MPOBTab = () => {
   const [bulkCategory, setBulkCategory] = useState<string>('stock');
 
   const categoriesToFetch = subTab === 'all'
-    ? ['stock', 'production', 'export_port', 'export_product']
-    : [subTab];
+    ? ['closing_stock', 'cpo_production', 'stock', 'production', 'export_port', 'export_product']
+    : subTab === 'balance' ? [] : [subTab];
 
   useEffect(() => {
     fetchData();
@@ -5701,10 +5901,10 @@ const MPOBTab = () => {
     }
   };
 
-  const handleSync = async () => {
+  const handleSync = async (history = false) => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/mpob/sync', { method: 'POST' });
+      const res = await fetch('/api/mpob/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ history }) });
       const json = await res.json();
       if (json.error) {
         alert(`MPOB 자동 동기화 실패: ${json.error}`);
@@ -5971,8 +6171,11 @@ const MPOBTab = () => {
         </div>
         {canWrite && (
         <div className="flex gap-2">
-          <button onClick={handleSync} disabled={syncing} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50" title="MPOB BEPI에 로그인해 재고·생산·수출(항구/품목) 최신 수치를 자동으로 가져옵니다">
+          <button onClick={() => handleSync(false)} disabled={syncing} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50" title="MPOB BEPI에 로그인해 총재고·CPO생산·정제유 재고·생산·수출(항구/품목) 최신 수치를 자동으로 가져옵니다">
             {syncing ? 'MPOB 가져오는 중...' : '🔄 MPOB 자동 가져오기'}
+          </button>
+          <button onClick={() => { if (window.confirm('2022년 이후 모든 연도의 MPOB 보고서를 다시 수집합니다 (1~2분 소요, 서버 제한으로 실패하면 로컬 스크립트 사용). 계속할까요?')) handleSync(true); }} disabled={syncing} className="px-3 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 font-medium disabled:opacity-50" title="과거 연도(2022~) 보고서 백필 — 수급 밸런스 분석용">
+            과거 백필
           </button>
           <span className="self-center text-[11px] text-slate-400" title="Vercel Cron: 매월 12일·22일 12:00(KST) 자동 동기화">
             {lastSynced ? `마지막 동기화 ${new Date(lastSynced).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ` : ''}자동: 매월 12·22일
@@ -6004,6 +6207,7 @@ const MPOBTab = () => {
         <div className="space-y-4">{[...Array(2)].map((_, i) => <Shimmer key={i} className="h-60" />)}</div>
       ) : (
         <>
+          {subTab === 'balance' && <SupplyDemandPanel />}
           {categoriesToFetch.map(cat => {
             const rows = data[cat] || [];
             if (rows.length === 0 && subTab !== 'all') {

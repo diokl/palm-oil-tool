@@ -1,8 +1,9 @@
 import { dbBatchRun } from './db';
-import { scrapeMPOBData, type MpobScrapeResult } from './mpob-scraper';
+import { scrapeMPOBData, type MpobScrapeResult, type ScrapeOptions } from './mpob-scraper';
 
 // MPOB BEPI 스크래핑 → mpob_data UPSERT. 수동 버튼(/api/mpob/sync)과
 // 월간 cron(/api/cron/mpob-sync)이 같은 함수를 호출한다.
+// history 옵션이면 섹션에 있는 모든 연도 보고서를 수집(과거 백필).
 
 export interface MpobSyncResult {
   count: number;
@@ -10,10 +11,14 @@ export interface MpobSyncResult {
   message: string;
 }
 
-export async function runMpobSync(): Promise<MpobSyncResult> {
-  const { records, summary } = await scrapeMPOBData();
+export async function runMpobSync(opts: ScrapeOptions = {}): Promise<MpobSyncResult> {
+  const { records, summary } = await scrapeMPOBData(opts);
 
-  const ops = records.map((r) => ({
+  // 같은 (category,item,year,month) 가 여러 페이지에서 오면(연도별 페이지가 2개년 포함) 마지막 값 채택
+  const dedup = new Map<string, typeof records[number]>();
+  for (const r of records) dedup.set(`${r.category}|${r.item_name}|${r.year}|${r.month}`, r);
+
+  const ops = [...dedup.values()].map((r) => ({
     sql: `INSERT INTO mpob_data (category, item_name, year, month, value, value_rm, parent_group, sort_order)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (category, item_name, year, month) DO UPDATE SET
@@ -35,8 +40,8 @@ export async function runMpobSync(): Promise<MpobSyncResult> {
   await Promise.all(chunks.map((c) => dbBatchRun(c)));
 
   return {
-    count: records.length,
+    count: ops.length,
     summary,
-    message: `MPOB 자동 동기화 완료: ${records.length}건 (${summary.map((s) => `${s.category} ${s.count}`).join(', ')})`,
+    message: `MPOB ${opts.history ? '과거 백필' : '자동 동기화'} 완료: ${ops.length}건 (${summary.map((s) => `${s.category} ${s.count}`).join(', ')})`,
   };
 }
