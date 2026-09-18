@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runMpobSync } from '@/lib/mpob-sync';
+import { runUsdaSync, usdaKeyConfigured } from '@/lib/usda-psd';
 
 // 월간 MPOB 자동 동기화 (Vercel Cron → GET).
 //
@@ -32,7 +33,13 @@ export async function GET(request: NextRequest) {
   try {
     const result = await runMpobSync();
     console.log(`[cron mpob-sync] ${startedAt} ok: ${result.message}`);
-    return NextResponse.json({ success: true, started_at: startedAt, ...result });
+    // USDA PSD 도 같은 월간 주기로 (키가 있을 때만, 실패해도 MPOB 결과는 유지)
+    let usda: any = null;
+    if (usdaKeyConfigured()) {
+      try { usda = await runUsdaSync(); console.log(`[cron mpob-sync] usda: ${usda.message}`); }
+      catch (e: any) { usda = { error: e.message }; console.warn(`[cron mpob-sync] usda failed: ${e.message}`); }
+    }
+    return NextResponse.json({ success: true, started_at: startedAt, ...result, usda });
   } catch (error: any) {
     console.error(`[cron mpob-sync] ${startedAt} failed: ${error.message}`);
     return NextResponse.json({ success: false, started_at: startedAt, error: error.message }, { status: 500 });

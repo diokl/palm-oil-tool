@@ -19,6 +19,8 @@ export const SERIES_META: Record<string, { label: string; unit: string; digits: 
   USDCNY: { label: 'USD/CNY', unit: 'CNY', digits: 4 },
   BRENT:  { label: 'Brent 원유', unit: 'USD/bbl', digits: 2 },
   HEATING_OIL: { label: 'Heating Oil (경유 대용)', unit: 'USD/gal', digits: 3 },
+  DCE_PALM: { label: '대련 팜올레인 (주력)', unit: 'CNY/t', digits: 0 },
+  DCE_SBO:  { label: '대련 대두유 (주력)', unit: 'CNY/t', digits: 0 },
 };
 
 // 단위 환산 (POGO 용)
@@ -131,14 +133,35 @@ async function collectSoybeanOil(days: number): Promise<SyncItem> {
   }
 }
 
+// ── 대련상품거래소(DCE) 선물 — Sina Finance 일봉 (P0 = 팜올레인 주력연속, Y0 = 대두유 주력연속, CNY/t) ──
+// DCE 공식 사이트는 봇 차단이라 Sina 의 공개 K라인 API 사용. 전체 이력이 오므로 days 만큼만 저장.
+async function collectSina(symbol: string, series: string, days: number): Promise<SyncItem> {
+  try {
+    const res = await fetch(`https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_x=/InnerFuturesNewService.getDailyKLine?symbol=${symbol}`, { headers: { 'User-Agent': UA, Referer: 'https://finance.sina.com.cn' } });
+    if (!res.ok) throw new Error(`sina ${symbol} ${res.status}`);
+    const txt = await res.text();
+    const m = txt.match(/\(\s*(\[[\s\S]*\])\s*\)/);
+    if (!m) throw new Error(`sina ${symbol}: parse`);
+    const arr = JSON.parse(m[1]) as { d: string; c: string }[];
+    const from = isoDaysAgo(days);
+    const pts = arr.filter(r => r.d >= from && Number(r.c) > 0).map(r => ({ date: r.d, value: Number(r.c) }));
+    const n = await upsertSeries(series, pts, 'sina');
+    return { series, count: n, source: 'sina', latest: pts.length ? pts[pts.length - 1].date : undefined };
+  } catch (e: any) {
+    return { series, count: 0, source: 'sina', error: e.message };
+  }
+}
+
 export async function runMarketDataSync(days = 14): Promise<MarketSyncResult> {
-  const [fx, brent, ho, sbo] = await Promise.all([
+  const [fx, brent, ho, sbo, dceP, dceY] = await Promise.all([
     collectFx(days),
     collectYahooSeries('BZ=F', 'BRENT', days),
     collectYahooSeries('HO=F', 'HEATING_OIL', days),
     collectSoybeanOil(days),
+    collectSina('P0', 'DCE_PALM', days),
+    collectSina('Y0', 'DCE_SBO', days),
   ]);
-  const items = [...fx, brent, ho, sbo];
+  const items = [...fx, brent, ho, sbo, dceP, dceY];
   const ok = items.filter(i => !i.error);
   const bad = items.filter(i => i.error);
   return {
@@ -153,7 +176,9 @@ export interface MacroSnapshot {
   latest: SeriesLatest[];
   palm: { date: string | null; usd_mt: number | null };
   pogo: { brent_usd_mt: number | null; ho_usd_mt: number | null; vs_brent: number | null; vs_ho: number | null };
-  series: { date: string; palm: number | null; brent_mt: number | null; ho_mt: number | null; pogo_brent: number | null; usdkrw: number | null; usdmyr: number | null }[];
+  // 중국(대련) — CNY/t 를 USD/MT 로 환산(USD/CNY). 대련 가격은 증치세(9%) 포함 국내가라 FCPO 대비 스프레드가 수입 채산성의 대용
+  dce: { date: string | null; palm_cny: number | null; palm_usd: number | null; sbo_cny: number | null; sbo_usd: number | null; palm_vs_fcpo: number | null; sbo_minus_palm_cny: number | null; usdcny: number | null };
+  series: { date: string; palm: number | null; brent_mt: number | null; ho_mt: number | null; pogo_brent: number | null; usdkrw: number | null; usdmyr: number | null; dce_palm_usd: number | null; dce_sbo_usd: number | null }[];
   last_synced_at: string | null;
 }
 
@@ -200,8 +225,13 @@ export async function getMacroSnapshot(days = 180): Promise<MacroSnapshot> {
   const krwMap = new Map((bySeries.get('USDKRW') ?? []).map(p => [p.date, p.value]));
   const myrMap = new Map((bySeries.get('USDMYR') ?? []).map(p => [p.date, p.value]));
   const brentDates = [...brentMap.keys()].sort(), hoDates = [...hoMap.keys()].sort(), krwDates = [...krwMap.keys()].sort(), myrDates = [...myrMap.keys()].sort();
+  const cnyMap = new Map((bySeries.get('USDCNY') ?? []).map(p => [p.date, p.value]));
+  const dcePMap = new Map((bySeries.get('DCE_PALM') ?? []).map(p => [p.date, p.value]));
+  const dceYMap = new Map((bySeries.get('DCE_SBO') ?? []).map(p => [p.date, p.value]));
+  const cnyDates = [...cnyMap.keys()].sort(), dcePDates = [...dcePMap.keys()].sort(), dceYDates = [...dceYMap.keys()].sort();
+  const toUsd = (cny: number | null, d: string) => { const fx = asOf(cnyMap, cnyDates, d); return cny != null && fx ? Math.round((cny / fx) * 10) / 10 : null; };
 
-  const allDates = [...new Set([...palmDates, ...brentDates])].sort();
+  const allDates = [...new Set([...palmDates, ...brentDates, ...dcePDates])].sort();
   const series = allDates.map(d => {
     const palm = palmPrice.get(d) ?? null;
     const b = brentMap.get(d) ?? null;
@@ -213,6 +243,7 @@ export async function getMacroSnapshot(days = 180): Promise<MacroSnapshot> {
       date: d, palm, brent_mt: brentMt, ho_mt: hoMt,
       pogo_brent: palmAsOf != null && brentMt != null ? Math.round((palmAsOf - brentMt) * 10) / 10 : null,
       usdkrw: asOf(krwMap, krwDates, d), usdmyr: asOf(myrMap, myrDates, d),
+      dce_palm_usd: toUsd(dcePMap.get(d) ?? null, d), dce_sbo_usd: toUsd(dceYMap.get(d) ?? null, d),
     };
   });
 
@@ -225,7 +256,20 @@ export async function getMacroSnapshot(days = 180): Promise<MacroSnapshot> {
 
   const syncRow = await dbAll(`SELECT MAX(updated_at) AS t FROM market_data`) as { t: string | null }[];
 
+  const dceDate = dcePDates.length ? dcePDates[dcePDates.length - 1] : null;
+  const dcePalmCny = dceDate ? dcePMap.get(dceDate)! : null;
+  const dceSboCny = dceDate ? (dceYMap.get(dceDate) ?? asOf(dceYMap, dceYDates, dceDate)) : null;
+  const dcePalmUsd = dceDate ? toUsd(dcePalmCny, dceDate) : null;
+  const dceSboUsd = dceDate ? toUsd(dceSboCny, dceDate) : null;
+  const palmForDce = dceDate ? asOf(palmPrice, palmDates, dceDate) : null;
+
   return {
+    dce: {
+      date: dceDate, palm_cny: dcePalmCny, palm_usd: dcePalmUsd, sbo_cny: dceSboCny, sbo_usd: dceSboUsd,
+      palm_vs_fcpo: dcePalmUsd != null && palmForDce != null ? Math.round((dcePalmUsd - palmForDce) * 10) / 10 : null,
+      sbo_minus_palm_cny: dceSboCny != null && dcePalmCny != null ? Math.round(dceSboCny - dcePalmCny) : null,
+      usdcny: dceDate ? asOf(cnyMap, cnyDates, dceDate) : null,
+    },
     latest,
     palm: { date: palmLatestDate, usd_mt: palmLatest },
     pogo: {

@@ -1700,13 +1700,14 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
           <span>Brent <b className="tabular-nums">${fmtV(L('BRENT'))}</b>{chg(L('BRENT'))}</span>
           {pogo?.vs_brent != null && <span title="팜유(USD/MT) − Brent(USD/MT 환산). 양수 = 팜유가 원유보다 비쌈 → 바이오디젤 수요 약화">POGO(팜유−원유) <b className={`tabular-nums ${pogoCls(pogo.vs_brent)}`}>{pogo.vs_brent > 0 ? '+' : ''}${formatNumber(pogo.vs_brent, 0)}</b></span>}
           {pogo?.vs_ho != null && <span className="text-slate-500" title="팜유 − Heating Oil(경유 대용, USD/MT 환산)">vs 경유 {pogo.vs_ho > 0 ? '+' : ''}${formatNumber(pogo.vs_ho, 0)}</span>}
+          {snap?.dce?.palm_usd != null && <span title="대련 팜올레인 주력월물(CNY/t → USD/MT 환산, 증치세 포함 국내가) − FCPO. 스프레드 축소 = 중국 수입 채산성 악화 → 수입 수요 둔화">🇨🇳 대련 팜유 <b className="tabular-nums">${formatNumber(snap.dce.palm_usd, 0)}</b> <span className={`font-semibold ${snap.dce.palm_vs_fcpo > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>(FCPO 대비 {snap.dce.palm_vs_fcpo > 0 ? '+' : ''}{formatNumber(snap.dce.palm_vs_fcpo, 0)})</span></span>}
           <span className="text-[10px] text-slate-400 ml-auto">{L('BRENT')?.date ?? ''} · 매일 07:30 자동</span>
         </div>
       </div>
     );
   }
 
-  const chart = (snap?.series ?? []).filter((p: any) => p.pogo_brent != null || p.palm != null).map((p: any) => ({ date: String(p.date).slice(5), palm: p.palm, brent: p.brent_mt, ho: p.ho_mt, pogo: p.pogo_brent }));
+  const chart = (snap?.series ?? []).filter((p: any) => p.pogo_brent != null || p.palm != null || p.dce_palm_usd != null).map((p: any) => ({ date: String(p.date).slice(5), palm: p.palm, brent: p.brent_mt, ho: p.ho_mt, pogo: p.pogo_brent, dce: p.dce_palm_usd }));
   return (
     <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1748,6 +1749,27 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
               <p className="text-[11px] text-slate-500">경유 ${formatNumber(pogo?.ho_usd_mt, 0)}/MT. 실제 POGO 는 가스오일(ICE) 기준이나 무료 소스가 없어 NYMEX Heating Oil 로 대용</p>
             </div>
           </div>
+          {/* 중국 대련(DCE) */}
+          {snap?.dce?.palm_cny != null && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-xl border border-slate-100 p-3 bg-red-50/30">
+                <p className="text-[11px] text-slate-500">🇨🇳 대련 팜올레인 주력월물 ({snap.dce.date})</p>
+                <p className="text-xl font-bold text-slate-800 tabular-nums">{formatNumber(snap.dce.palm_cny, 0)} <span className="text-xs font-normal text-slate-400">CNY/t</span></p>
+                <p className="text-[11px] text-slate-500">≈ ${formatNumber(snap.dce.palm_usd, 0)}/MT (USD/CNY {snap.dce.usdcny})</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 p-3 bg-red-50/30">
+                <p className="text-[11px] text-slate-500">중국 수입 채산성 — 대련 팜유 − FCPO (USD/MT)</p>
+                <p className={`text-xl font-bold tabular-nums ${snap.dce.palm_vs_fcpo > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{snap.dce.palm_vs_fcpo > 0 ? '+' : ''}${formatNumber(snap.dce.palm_vs_fcpo, 0)}</p>
+                <p className="text-[11px] text-slate-500">대련가는 증치세(9%)·물류 포함 국내가라 평상시 +$150~250 수준. 그 아래로 축소되면 중국 수입 수요 둔화 신호</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 p-3 bg-red-50/30">
+                <p className="text-[11px] text-slate-500">중국 내 대두유 − 팜유 스프레드 (CNY/t)</p>
+                <p className={`text-xl font-bold tabular-nums ${(snap.dce.sbo_minus_palm_cny ?? 0) > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{snap.dce.sbo_minus_palm_cny != null ? `${snap.dce.sbo_minus_palm_cny > 0 ? '+' : ''}${formatNumber(snap.dce.sbo_minus_palm_cny, 0)}` : '-'}</p>
+                <p className="text-[11px] text-slate-500">대두유 {formatNumber(snap.dce.sbo_cny, 0)} CNY/t. 음수(팜유가 더 비쌈)면 중국 수요가 대두유로 이동 → 팜유 수입 감소 요인</p>
+              </div>
+            </div>
+          )}
+
           {chart.length > 0 && (
             <div>
               <p className="text-xs font-semibold text-slate-600 mb-2">팜유 · Brent · 경유 (USD/MT) 와 POGO 스프레드 — 최근 180일</p>
@@ -1763,6 +1785,7 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
                   <Line yAxisId="l" type="monotone" dataKey="palm" name="팜유" stroke="#dc2626" strokeWidth={2} dot={false} connectNulls />
                   <Line yAxisId="l" type="monotone" dataKey="brent" name="Brent(/MT)" stroke="#1e293b" strokeWidth={1.5} dot={false} connectNulls />
                   <Line yAxisId="l" type="monotone" dataKey="ho" name="경유(/MT)" stroke="#64748b" strokeWidth={1} strokeDasharray="4 4" dot={false} connectNulls />
+                  <Line yAxisId="l" type="monotone" dataKey="dce" name="대련 팜유(USD/MT)" stroke="#b91c1c" strokeWidth={1.5} strokeDasharray="2 2" dot={false} connectNulls />
                   <ReferenceLine yAxisId="r" y={0} stroke="#f59e0b" strokeDasharray="3 3" />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -6107,12 +6130,13 @@ const DocVerifyTab = () => {
 
 // ============ MPOB TAB ============
 
-type MpobSubTab = 'balance' | 'closing_stock' | 'cpo_production' | 'stock' | 'production' | 'export_port' | 'export_product' | 'all';
+type MpobSubTab = 'balance' | 'world' | 'closing_stock' | 'cpo_production' | 'stock' | 'production' | 'export_port' | 'export_product' | 'all';
 
 const MPOB_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const MPOB_CATEGORIES: { id: MpobSubTab; label: string; aggType: 'average' | 'total' }[] = [
   { id: 'balance', label: '⚖️ 수급 밸런스', aggType: 'total' },
+  { id: 'world', label: '🌏 세계 수급 (USDA)', aggType: 'total' },
   { id: 'closing_stock', label: 'Closing Stock (총재고)', aggType: 'average' },
   { id: 'cpo_production', label: 'CPO Production', aggType: 'total' },
   { id: 'stock', label: 'Stock (정제유 재고)', aggType: 'average' },
@@ -6121,6 +6145,84 @@ const MPOB_CATEGORIES: { id: MpobSubTab; label: string; aggType: 'average' | 'to
   { id: 'export_product', label: 'Export by Product', aggType: 'total' },
   { id: 'all', label: '전체 보기', aggType: 'total' },
 ];
+
+// ============ 세계 수급 패널 (USDA PSD, MPOB 탭) ============
+// 중국·인도·인니·말레이 등 국가별 팜유/대두유 생산·수입·소비·기말재고 (마케팅연도, 1000 MT)
+const UsdaPanel = () => {
+  const { canWrite } = useAuth();
+  const [commodity, setCommodity] = useState<'PALM' | 'SOY_OIL'>('PALM');
+  const [data, setData] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const load = async (c = commodity) => {
+    setLoading(true);
+    try { const r = await fetch(`/api/usda?commodity=${c}`); const j = await r.json(); if (!j.error) setData(j); }
+    catch (e) { console.error('usda fetch failed', e); } finally { setLoading(false); }
+  };
+  useEffect(() => { load(commodity); }, [commodity]);
+  const sync = async () => {
+    setSyncing(true); setMsg(null);
+    try { const r = await fetch('/api/usda', { method: 'POST' }); const j = await r.json(); setMsg(j.error ? `동기화 실패: ${j.error}` : j.message); if (!j.error) load(); }
+    catch { setMsg('동기화 중 오류'); } finally { setSyncing(false); }
+  };
+  if (loading) return <Shimmer className="h-60" />;
+  const rows: any[] = data?.rows ?? [];
+  const years: number[] = data?.years ?? [];
+  const showYears = years.slice(-4);
+  const countries = [...new Set(rows.map(r => r.country))];
+  const cell = (c: string, y: number) => rows.find(r => r.country === c && r.market_year === y);
+  const k = (n: number | null | undefined) => n == null ? '-' : formatNumber(n, 0);
+  const yoy = (n: number | null | undefined) => n == null ? '' : <span className={`ml-1 text-[9px] ${n > 0 ? 'text-rose-500' : 'text-blue-500'}`}>{n > 0 ? '+' : ''}{n}%</span>;
+  return (
+    <div className="space-y-4">
+      <div className="card p-4 flex items-center gap-3 flex-wrap">
+        <p className="text-sm font-semibold text-slate-700">🌏 세계 수급 (USDA FAS PSD)</p>
+        <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+          {(['PALM', 'SOY_OIL'] as const).map(c => <button key={c} onClick={() => setCommodity(c)} className={`px-3 py-1 text-xs font-medium rounded-md ${commodity === c ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>{c === 'PALM' ? '팜유' : '대두유'}</button>)}
+        </div>
+        {canWrite && <button onClick={sync} disabled={syncing} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50">{syncing ? '동기화 중...' : '🔄 USDA 동기화'}</button>}
+        {data?.last_synced_at && <span className="text-[11px] text-slate-400">마지막 {new Date(data.last_synced_at).toLocaleDateString('ko-KR')}</span>}
+        <span className="text-[11px] text-slate-400 ml-auto">단위 1,000 MT · 마케팅연도(팜유 10월~9월) · WASDE 후 월 1회 자동(MPOB cron)</span>
+      </div>
+      {msg && <div className="px-3 py-2 rounded-lg text-xs bg-amber-50 text-amber-700 border border-amber-100">{msg}</div>}
+      {!data?.key_configured && (
+        <div className="card p-4 bg-amber-50/50 border-amber-200 text-xs text-slate-700 space-y-1">
+          <p className="font-semibold">USDA API 키가 아직 설정되지 않았습니다.</p>
+          <p>1) https://apps.fas.usda.gov/psdonline/app/index.html#/app/downloads → "API" 메뉴에서 무료 키 발급 (이메일만 필요)</p>
+          <p>2) Vercel 환경변수 <code>USDA_API_KEY</code> 에 저장 후 재배포 → 이 화면의 'USDA 동기화' 클릭</p>
+        </div>
+      )}
+      {rows.length === 0 ? (
+        <div className="card p-8 text-center text-sm text-slate-500">아직 데이터가 없습니다. 키 설정 후 동기화하세요.</div>
+      ) : (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                <th className="px-3 py-2 text-left">국가</th><th className="px-3 py-2 text-left">항목</th>
+                {showYears.map(y => <th key={y} className="px-3 py-2 text-right">{y}/{String(y + 1).slice(2)}</th>)}
+              </tr></thead>
+              <tbody className="divide-y divide-slate-100">
+                {countries.map(c => (
+                  <React.Fragment key={c}>
+                    {[['production', '생산'], ['imports', '수입'], ['domestic_consumption', '소비'], ['exports', '수출'], ['ending_stocks', '기말재고'], ['stock_to_use', '재고/소비(%)']].map(([attr, label], i) => (
+                      <tr key={`${c}-${attr}`} className={`tabular-nums ${i === 0 ? 'border-t-2 border-slate-200' : ''} ${attr === 'imports' ? 'bg-blue-50/30' : ''}`}>
+                        <td className="px-3 py-1.5 font-medium text-slate-700">{i === 0 ? (rows.find(r => r.country === c)?.country_label ?? c) : ''}</td>
+                        <td className="px-3 py-1.5 text-slate-500">{label}</td>
+                        {showYears.map(y => { const r = cell(c, y); return <td key={y} className="px-3 py-1.5 text-right">{attr === 'stock_to_use' ? (r?.stock_to_use != null ? `${r.stock_to_use}%` : '-') : <>{k(r?.[attr])}{attr === 'imports' ? yoy(r?.imports_yoy) : attr === 'domestic_consumption' ? yoy(r?.consumption_yoy) : null}</>}</td>; })}
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ============ 수급 밸런스 패널 (MPOB 탭) ============
 // 총재고 · 재고/수출 비율 · CPO 생산 · 팜유 수출 + FCPO 월평균 가격과의 관계(산점도·회귀)
@@ -6309,7 +6411,7 @@ const MPOBTab = () => {
 
   const categoriesToFetch = subTab === 'all'
     ? ['closing_stock', 'cpo_production', 'stock', 'production', 'export_port', 'export_product']
-    : subTab === 'balance' ? [] : [subTab];
+    : (subTab === 'balance' || subTab === 'world') ? [] : [subTab];
 
   useEffect(() => {
     fetchData();
@@ -6700,6 +6802,7 @@ const MPOBTab = () => {
       ) : (
         <>
           {subTab === 'balance' && <SupplyDemandPanel />}
+          {subTab === 'world' && <UsdaPanel />}
           {categoriesToFetch.map(cat => {
             const rows = data[cat] || [];
             if (rows.length === 0 && subTab !== 'all') {
