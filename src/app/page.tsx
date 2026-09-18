@@ -1456,6 +1456,96 @@ const MpobSignalCards = ({ rows, sd, onNavigate }: { rows: MpobSummaryRow[]; sd?
   );
 };
 
+// ============ 리스크 정량화 패널 (구매 알람 탭) ============
+// 미확정 물량(향후 6개월 재고 흐름에서 부족분) × 현재가 × FCPO 변동성 → VaR95, 계획단가 대비 연간 예상 평균단가
+const RiskPanel = () => {
+  const { canWrite } = useAuth();
+  const [risk, setRisk] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [planInput, setPlanInput] = useState('');
+  const load = async () => {
+    try { const r = await fetch('/api/risk?horizon=6'); const j = await r.json(); if (!j.error) setRisk(j); }
+    catch (e) { console.error('risk fetch failed', e); } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+  const savePlan = async (product: string) => {
+    const v = parseFloat(planInput);
+    if (!(v > 0)) { setEditing(null); return; }
+    await fetch('/api/risk', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ product, plan_price: v }) });
+    setEditing(null); load();
+  };
+  if (loading) return <Shimmer className="h-40" />;
+  if (!risk) return null;
+  const fmtT = (kg: number | null | undefined) => kg == null ? '-' : `${Math.round(kg / 1000).toLocaleString()}톤`;
+  const fmtUsd = (v: number | null | undefined) => v == null ? '-' : `$${Math.round(v).toLocaleString()}`;
+  const fmtKrw = (v: number | null | undefined) => v == null ? '-' : `${(v / 1e8).toFixed(1)}억원`;
+  const PLABEL: Record<string, string> = { RBD: 'RBD', RSPO: 'RSPO', MANAGED: '관리팜유' };
+  return (
+    <div className="space-y-3">
+      <div className="card p-3 bg-orange-50/40 border-orange-100">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
+          <span className="font-semibold text-slate-800">🛡️ 리스크 노출 ({risk.as_of})</span>
+          <span>FCPO 근월 <b className="tabular-nums">${formatNumber(risk.fcpo_price, 1)}</b></span>
+          <span>일 변동성 <b className="tabular-nums">{risk.sigma_daily != null ? (risk.sigma_daily * 100).toFixed(2) : '-'}%</b></span>
+          <span>VaR95 1개월 <b className="tabular-nums text-rose-600">±{risk.var1m_pct ?? '-'}%</b> · 3개월 <b className="tabular-nums text-rose-600">±{risk.var3m_pct ?? '-'}%</b></span>
+          <span className="text-slate-500">USD/KRW {formatNumber(risk.usdkrw, 1)}</span>
+        </div>
+        <p className="text-[11px] text-slate-500 mt-1">{risk.signal}</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {(risk.products as any[]).map(p => {
+          const short = p.uncovered_kg > 0;
+          return (
+            <div key={p.product} className={`card p-4 ${short ? 'border-rose-200 bg-rose-50/30' : 'border-emerald-100 bg-emerald-50/20'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-slate-800">{PLABEL[p.product]}</span>
+                <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${short ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{short ? `${p.first_shortage_ym} 부족` : '6개월 커버'}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <span className="text-slate-500">미확정 물량</span><span className="text-right font-semibold tabular-nums">{fmtT(p.uncovered_kg)}</span>
+                <span className="text-slate-500">기준가 (RBD+프리미엄)</span><span className="text-right tabular-nums">{p.ref_price != null ? `$${formatNumber(p.ref_price, 1)}` : '-'}</span>
+                <span className="text-slate-500">현재가 매입 시</span><span className="text-right tabular-nums">{fmtUsd(p.cost_now_usd)}</span>
+                <span className="text-slate-500">VaR95 1개월</span><span className="text-right tabular-nums text-rose-600">{fmtUsd(p.var1m_usd)} <span className="text-slate-400">({fmtKrw(p.var1m_krw)})</span></span>
+                <span className="text-slate-500">VaR95 3개월</span><span className="text-right tabular-nums text-rose-600">{fmtUsd(p.var3m_usd)} <span className="text-slate-400">({fmtKrw(p.var3m_krw)})</span></span>
+              </div>
+              {/* 6개월 흐름 미니 */}
+              <div className="mt-2 flex gap-1">
+                {(p.flow as any[]).map(f => (
+                  <div key={f.ym} className="flex-1 text-center" title={`${f.ym} 소요 ${Math.round(f.usage / 1000)}톤 / 통관 ${Math.round(f.customs / 1000)}톤 / 기말 ${Math.round(f.ending / 1000)}톤`}>
+                    <div className={`h-1.5 rounded ${f.ending < 0 ? 'bg-rose-400' : f.ending < f.usage ? 'bg-amber-300' : 'bg-emerald-300'}`} />
+                    <span className="text-[9px] text-slate-400">{f.ym.slice(5)}</span>
+                  </div>
+                ))}
+              </div>
+              {/* 계획단가 */}
+              <div className="mt-3 pt-2 border-t border-slate-100 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">계획단가</span>
+                  {editing === p.product ? (
+                    <input autoFocus type="number" value={planInput} onChange={e => setPlanInput(e.target.value)} onBlur={() => savePlan(p.product)} onKeyDown={e => { if (e.key === 'Enter') savePlan(p.product); if (e.key === 'Escape') setEditing(null); }} className="w-24 px-2 py-0.5 text-xs text-right border border-blue-300 rounded bg-blue-50/50" />
+                  ) : (
+                    <span className={`tabular-nums font-semibold ${canWrite ? 'cursor-pointer editable-cell' : ''}`} onClick={() => { if (canWrite) { setEditing(p.product); setPlanInput(p.plan.plan_price ?? ''); } }} title={canWrite ? '클릭해 계획단가 입력 (USD/MT)' : ''}>{p.plan.plan_price != null ? `$${formatNumber(p.plan.plan_price, 1)}` : <span className="text-slate-300 italic">미입력 ✎</span>}</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1">
+                  <span className="text-slate-500">올해 계약 {formatNumber(p.plan.ytd_qty_mt, 0)}MT 평균</span><span className="text-right tabular-nums">{p.plan.ytd_wavg != null ? `$${formatNumber(p.plan.ytd_wavg, 1)}` : '-'}</span>
+                  <span className="text-slate-500">잔여 미계약 {fmtT(p.plan.remaining_kg)}</span><span className="text-right tabular-nums text-slate-500">현재가 가정</span>
+                  <span className="text-slate-500">연간 예상 평균</span><span className="text-right tabular-nums font-semibold">{p.plan.projected_avg != null ? `$${formatNumber(p.plan.projected_avg, 1)}` : '-'}</span>
+                  {p.plan.gap_vs_plan != null && (<>
+                    <span className="text-slate-500">계획 대비</span><span className={`text-right tabular-nums font-semibold ${p.plan.gap_vs_plan > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{p.plan.gap_vs_plan > 0 ? '+' : ''}${formatNumber(p.plan.gap_vs_plan, 1)} ({fmtKrw(p.plan.budget_impact_krw)})</span>
+                  </>)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-slate-400">* 미확정 물량 = 향후 6개월 재고 흐름(예상소요 − 계약 통관)에서 기말재고가 0 아래로 내려가는 누적분. VaR95 = 1.645 × 일변동성(60일) × √영업일 × 기준가 × 물량. 계획단가는 클릭해 입력(USD/MT).</p>
+    </div>
+  );
+};
+
 // ============ 구매 전략 백테스트 패널 (구매이력 탭) ============
 const BacktestPanel = () => {
   const [product, setProduct] = useState<'RBD' | 'RSPO' | 'MANAGED'>('RBD');
@@ -5630,6 +5720,9 @@ const AlertsTab = () => {
           <p className="text-2xl font-bold text-amber-600 tabular-nums">{warningCount}</p>
         </div>
       </div>
+
+      {/* 리스크 정량화: 미확정 물량 노출 · VaR · 계획단가 추적 */}
+      <RiskPanel />
 
       {loading ? (
         <div className="space-y-3">{[...Array(3)].map((_, i) => <Shimmer key={i} className="h-20" />)}</div>
