@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { dbAll, dbGet } from '@/lib/db';
-import { seedInitialData } from '@/lib/seed-data';
+
 import { generateAlerts } from '@/lib/inventory-calc';
 import { calculateBoxRange } from '@/lib/box-range';
 import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
@@ -8,17 +8,15 @@ import { getOilSpread } from '@/lib/oil-spread';
 import { getSupplyDemand } from '@/lib/supply-demand';
 import type { Product } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 30;
+
 export async function GET() {
   try {
-    // Seed data (best-effort: skip if writes are blocked on free tier)
-    try {
-      await seedInitialData();
-    } catch (seedErr: any) {
-      console.warn('Seed data skipped:', seedErr.message);
-    }
+    // (seedInitialData 는 /api/init 로만 — 매 요청 COUNT 쿼리 제거)
 
-    // Active alerts (computed in-memory, DB write is best-effort)
-    const alerts = await generateAlerts();
+    // Active alerts — 계산만 (DB 기록은 /api/alerts 에서만, 30초 폴링이 쓰기를 유발하지 않도록)
+    const alerts = await generateAlerts(false);
 
     // Latest FCPO prices (most recent date, all contract months)
     const latestDate = await dbGet(

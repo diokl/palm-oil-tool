@@ -6,7 +6,7 @@ import { generateAlerts } from '@/lib/inventory-calc';
 export async function GET() {
   try {
     try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
-    const alerts = await generateAlerts();
+    const alerts = await generateAlerts(true);
     return NextResponse.json({ data: alerts });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

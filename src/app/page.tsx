@@ -7162,7 +7162,7 @@ export default function Home() {
   useEffect(() => {
     fetchDashboardData();
     fetchUserInfo();
-    const interval = setInterval(fetchDashboardData, 30000);
+    const interval = setInterval(fetchDashboardData, 120000); // 2분 (30초 폴링은 DB 부하·잠금 대기의 원인이었음)
     return () => clearInterval(interval);
   }, []);
 

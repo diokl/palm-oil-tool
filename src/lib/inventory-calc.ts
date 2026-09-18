@@ -128,7 +128,11 @@ export async function recalcInventory(
   }));
 }
 
-export async function generateAlerts(): Promise<Alert[]> {
+// persist=false 면 DB 기록 없이 계산만 (대시보드 30초 폴링용).
+// 기록은 /api/alerts 에서만, 그리고 활성 알람 내용이 바뀐 경우에만 한다.
+// (이전: 모든 호출마다 'UPDATE alerts SET is_active=0 WHERE 1=1' + INSERT → 동시 요청이 행 잠금 대기로 줄을 서서
+//  DB 커넥션이 전부 묶이는 장애가 있었음)
+export async function generateAlerts(persist = false): Promise<Alert[]> {
   const alerts: Alert[] = [];
 
   for (const product of ['RBD', 'RSPO', 'MANAGED'] as const) {
@@ -212,10 +216,16 @@ export async function generateAlerts(): Promise<Alert[]> {
     });
   }
 
-  // Save alerts to DB (best-effort)
+  if (!persist) return alerts;
+
+  // Save alerts to DB (best-effort) — 활성 알람 집합이 바뀐 경우에만 기록
   try {
+    const current = await dbAll(`SELECT product, alert_level, message FROM alerts WHERE is_active = 1 ORDER BY product`) as { product: string; alert_level: string; message: string }[];
+    const key = (a: { product: string; alert_level: string; message: string | null }) => `${a.product}|${a.alert_level}|${a.message ?? ''}`;
+    const same = current.length === alerts.length && current.map(key).sort().join('\n') === alerts.map(key).sort().join('\n');
+    if (same) return alerts;
     const ops: { sql: string; params: any[] }[] = [
-      { sql: `UPDATE alerts SET is_active = 0 WHERE 1=1`, params: [] },
+      { sql: `UPDATE alerts SET is_active = 0 WHERE is_active = 1`, params: [] },
     ];
     for (const a of alerts) {
       ops.push({
