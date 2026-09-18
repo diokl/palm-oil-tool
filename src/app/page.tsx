@@ -6189,7 +6189,7 @@ const UsdaPanel = () => {
       {!data?.key_configured && (
         <div className="card p-4 bg-amber-50/50 border-amber-200 text-xs text-slate-700 space-y-1">
           <p className="font-semibold">USDA API 키가 아직 설정되지 않았습니다.</p>
-          <p>1) https://apps.fas.usda.gov/psdonline/app/index.html#/app/downloads → "API" 메뉴에서 무료 키 발급 (이메일만 필요)</p>
+          <p>1) https://apps.fas.usda.gov/opendatawebV2/#/signup (API Key Signup) → api.data.gov 양식에 이름·이메일 입력 → 키가 이메일로 발송</p>
           <p>2) Vercel 환경변수 <code>USDA_API_KEY</code> 에 저장 후 재배포 → 이 화면의 'USDA 동기화' 클릭</p>
         </div>
       )}

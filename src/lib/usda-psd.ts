@@ -2,7 +2,9 @@ import { dbAll, dbBatchRun } from './db';
 
 // ── USDA FAS PSD (Production, Supply & Distribution) — 국가별 팜유·대두유 수급 ──
 //
-// API: https://apps.fas.usda.gov/OpenData  (무료 키 필요: 환경변수 USDA_API_KEY, 헤더 API_KEY)
+// API: https://api.fas.usda.gov  (Swagger: apps.fas.usda.gov/opendatawebV2)
+//   키: api.data.gov 에서 발급 (opendatawebV2 의 'API Key Signup') → 환경변수 USDA_API_KEY
+//   인증 헤더는 api.data.gov 표준 X-Api-Key. 구 호스트(apps.fas.usda.gov/OpenData, 헤더 API_KEY)도 폴백으로 시도.
 //   GET /api/psd/commodity/{commodityCode}/country/{countryCode}/year/{marketYear}
 //   → [{ commodityCode, countryCode, marketYear, calendarYear, month, attributeId, unitId, value }]
 // 상품코드: 4243000 Oil, Palm / 4232000 Oil, Soybean
@@ -33,7 +35,12 @@ export async function runUsdaSync(opts: { years?: number[]; commodities?: string
     for (const cc of countries) {
       for (const y of years) {
         try {
-          const res = await fetch(`https://apps.fas.usda.gov/OpenData/api/psd/commodity/${USDA_COMMODITIES[c]}/country/${cc}/year/${y}`, { headers: { API_KEY: key, Accept: 'application/json' } });
+          const path = `/api/psd/commodity/${USDA_COMMODITIES[c]}/country/${cc}/year/${y}`;
+          let res = await fetch(`https://api.fas.usda.gov${path}`, { headers: { 'X-Api-Key': key, API_KEY: key, Accept: 'application/json' } });
+          if (res.status === 401 || res.status === 403) {
+            // 구 호스트 폴백
+            res = await fetch(`https://apps.fas.usda.gov/OpenData${path}`, { headers: { API_KEY: key, Accept: 'application/json' } });
+          }
           if (res.status === 404) continue;
           if (!res.ok) throw new Error(`${res.status}`);
           const rows = await res.json() as { attributeId: number; value: number; marketYear: number }[];
