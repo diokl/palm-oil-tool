@@ -1456,6 +1456,113 @@ const MpobSignalCards = ({ rows, sd, onNavigate }: { rows: MpobSummaryRow[]; sd?
   );
 };
 
+// ============ 구매 전략 백테스트 패널 (구매이력 탭) ============
+const BacktestPanel = () => {
+  const [product, setProduct] = useState<'RBD' | 'RSPO' | 'MANAGED'>('RBD');
+  const [from, setFrom] = useState('2021-01');
+  const [bt, setBt] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/backtest?product=${product}&from=${from}`).then(r => r.json()).then(j => { if (!j.error) setBt(j); }).catch(e => console.error('backtest failed', e)).finally(() => setLoading(false));
+  }, [product, from]);
+
+  const LABEL: Record<string, string> = { forward_3m: '3개월 선구매', split_3: '3분할(월초)', window_avg: '기간 평균', last_day: '최대 지연', box_range: '박스권 적극구매', box_full: '박스권 전량구매', spot_month: '당월 시황', best: '최저(사후)', worst: '최고(사후)', actual: '실제 계약' };
+  const MAIN = ['forward_3m', 'split_3', 'window_avg', 'last_day', 'box_range', 'box_full', 'actual'];
+  const cls = (v: number | null) => v == null ? 'text-slate-400' : v > 0 ? 'text-emerald-600' : v < 0 ? 'text-rose-600' : 'text-slate-500';
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-4 flex items-center gap-3 flex-wrap">
+        <p className="text-sm font-semibold text-slate-700">🧪 구매 전략 백테스트</p>
+        <select value={product} onChange={e => setProduct(e.target.value as any)} className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white">
+          <option value="RBD">RBD (실제 계약 비교)</option><option value="RSPO">RSPO</option><option value="MANAGED">관리팜유</option>
+        </select>
+        <span className="text-xs text-slate-500">시작</span>
+        <select value={from} onChange={e => setFrom(e.target.value)} className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white">
+          {['2020-04', '2021-01', '2022-01', '2023-01', '2024-01', '2025-01', '2026-01'].map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <span className="text-[11px] text-slate-400 ml-auto">{bt?.note}</span>
+      </div>
+      {loading ? <Shimmer className="h-60" /> : !bt || !bt.months?.length ? (
+        <div className="card p-8 text-center text-sm text-slate-500">백테스트할 시세 데이터가 부족합니다.</div>
+      ) : (
+        <>
+          {/* 전략 요약 */}
+          <div className="card overflow-hidden">
+            <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <p className="text-xs font-semibold text-slate-600">전략별 평균 단가 ({bt.from} ~ {bt.to}, {bt.months.length}개 선적월)</p>
+              <p className="text-[11px] text-slate-400">절감 = 당월 시황 − 전략 단가 (USD/MT, 양수 = 선구매가 유리했음)</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500">
+                  <th className="px-4 py-2 text-left">전략</th><th className="px-4 py-2 text-right">개월</th><th className="px-4 py-2 text-right">평균 단가</th><th className="px-4 py-2 text-right">시황 대비 절감</th><th className="px-4 py-2 text-right">승률</th><th className="px-4 py-2 text-right">기간 내 백분위</th><th className="px-4 py-2 text-right">표준편차</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(bt.summary as any[]).filter(s => s.months > 0).map(s => (
+                    <tr key={s.strategy} className={`tabular-nums hover:bg-slate-50/60 ${s.strategy === 'actual' ? 'bg-blue-50/40 font-semibold' : s.strategy === 'spot_month' ? 'bg-amber-50/30' : ''}`}>
+                      <td className="px-4 py-2 text-slate-700">{s.label}</td>
+                      <td className="px-4 py-2 text-right text-slate-500">{s.months}</td>
+                      <td className="px-4 py-2 text-right font-semibold">${formatNumber(s.avg_price, 1)}</td>
+                      <td className={`px-4 py-2 text-right ${cls(s.vs_spot_avg)}`}>{s.vs_spot_avg != null ? `${s.vs_spot_avg > 0 ? '+' : ''}${formatNumber(s.vs_spot_avg, 1)}` : '-'}</td>
+                      <td className="px-4 py-2 text-right">{s.win_rate_vs_spot != null ? `${s.win_rate_vs_spot}%` : '-'}</td>
+                      <td className="px-4 py-2 text-right text-slate-600">{s.avg_percentile != null ? `${s.avg_percentile}%` : '-'}</td>
+                      <td className="px-4 py-2 text-right text-slate-500">{s.stdev != null ? formatNumber(s.stdev, 1) : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="px-5 py-2 text-[11px] text-slate-500">읽는 법: '기간 내 백분위'는 계약 가능 기간 중 그 전략이 산 가격이 몇 번째로 쌌는지(0% = 최저가, 50% = 중간). 실제 계약 행이 기간 평균보다 낮고 백분위가 50% 아래면 타이밍 판단이 가치를 냈다는 뜻입니다.</p>
+          </div>
+
+          {/* 연도별 */}
+          <div className="card overflow-hidden">
+            <div className="px-5 py-3 bg-slate-50 border-b border-slate-200"><p className="text-xs font-semibold text-slate-600">연도별 평균 단가 (USD/MT)</p></div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500"><th className="px-4 py-2 text-left">연도</th><th className="px-4 py-2 text-right">개월</th><th className="px-4 py-2 text-right">3개월 선구매</th><th className="px-4 py-2 text-right">기간 평균</th><th className="px-4 py-2 text-right">박스권</th><th className="px-4 py-2 text-right">당월 시황</th><th className="px-4 py-2 text-right">실제 계약</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(bt.by_year as any[]).map(y => (
+                    <tr key={y.year} className="tabular-nums"><td className="px-4 py-2 font-medium">{y.year}</td><td className="px-4 py-2 text-right text-slate-500">{y.months}</td><td className="px-4 py-2 text-right">{y.forward_3m != null ? `$${formatNumber(y.forward_3m, 1)}` : '-'}</td><td className="px-4 py-2 text-right">{y.window_avg != null ? `$${formatNumber(y.window_avg, 1)}` : '-'}</td><td className="px-4 py-2 text-right">{y.box_range != null ? `$${formatNumber(y.box_range, 1)}` : '-'}</td><td className="px-4 py-2 text-right text-amber-700">{y.spot_month != null ? `$${formatNumber(y.spot_month, 1)}` : '-'}</td><td className="px-4 py-2 text-right font-semibold text-blue-700">{y.actual != null ? `$${formatNumber(y.actual, 1)}` : '-'}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 월별 상세 */}
+          <div className="card overflow-hidden">
+            <div className="px-5 py-3 bg-slate-50 border-b border-slate-200"><p className="text-xs font-semibold text-slate-600">선적월별 전략 단가 (USD/MT) — 실제 계약 백분위 = 계약 가능 기간 중 실제 계약가 위치</p></div>
+            <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0"><tr className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                  <th className="px-3 py-2 text-left">선적월</th><th className="px-3 py-2 text-left">기간</th>
+                  {MAIN.map(k => <th key={k} className="px-3 py-2 text-right">{LABEL[k]}</th>)}
+                  <th className="px-3 py-2 text-right">당월 시황</th><th className="px-3 py-2 text-right">최저~최고</th><th className="px-3 py-2 text-right">실제 백분위</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {[...(bt.months as any[])].reverse().map(m => (
+                    <tr key={m.shipment_month} className="tabular-nums hover:bg-slate-50/60">
+                      <td className="px-3 py-1.5 font-medium text-slate-700">{m.shipment_month}</td>
+                      <td className="px-3 py-1.5 text-[10px] text-slate-400">{m.window_from.slice(5)}~{m.window_to.slice(5)} ({m.window_days}일)</td>
+                      {MAIN.map(k => { const v = m.prices[k]; const spot = m.prices.spot_month; const better = v != null && spot != null && v < spot; return <td key={k} className={`px-3 py-1.5 text-right ${k === 'actual' ? 'font-semibold text-blue-700' : better ? 'text-emerald-700' : 'text-slate-600'}`}>{v != null ? formatNumber(v, 1) : '-'}</td>; })}
+                      <td className="px-3 py-1.5 text-right text-amber-700">{m.prices.spot_month != null ? formatNumber(m.prices.spot_month, 1) : '-'}</td>
+                      <td className="px-3 py-1.5 text-right text-slate-400">{formatNumber(m.prices.best, 0)}~{formatNumber(m.prices.worst, 0)}</td>
+                      <td className={`px-3 py-1.5 text-right font-semibold ${m.actual_percentile == null ? 'text-slate-300' : m.actual_percentile <= 35 ? 'text-emerald-600' : m.actual_percentile >= 65 ? 'text-rose-600' : 'text-slate-600'}`}>{m.actual_percentile != null ? `${m.actual_percentile}%` : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ============ 매크로 (환율·원유·POGO) 패널 ============
 // compact: 대시보드 한 줄 스트립 / full: 대두유 탭 카드 (최신값·POGO 차트·수집 버튼)
 const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
@@ -3482,7 +3589,7 @@ const emptyPurchaseForm = {
 
 const PurchasesTab = () => {
   const { canWrite } = useAuth();
-  const [subTab, setSubTab] = useState<'raw' | 'prebuy'>('raw');
+  const [subTab, setSubTab] = useState<'raw' | 'prebuy' | 'backtest'>('raw');
   const [purchaseData, setPurchaseData] = useState<PurchaseItem[]>([]);
   const [rawSummary, setRawSummary] = useState<PurchasesRawResponse['summary'] | null>(null);
   const [prebuyData, setPrebuyData] = useState<PrebuyRow[]>([]);
@@ -3893,7 +4000,13 @@ const PurchasesTab = () => {
         <button onClick={() => setSubTab('prebuy')} className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${subTab === 'prebuy' ? 'bg-white text-blue-600 border border-b-0 border-slate-200 -mb-[1px]' : 'text-slate-500 hover:text-slate-700'}`}>
           선구매 효과 분석
         </button>
+        <button onClick={() => setSubTab('backtest')} className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${subTab === 'backtest' ? 'bg-white text-blue-600 border border-b-0 border-slate-200 -mb-[1px]' : 'text-slate-500 hover:text-slate-700'}`}>
+          전략 백테스트
+        </button>
       </div>
+
+      {/* ===== BACKTEST VIEW ===== */}
+      {subTab === 'backtest' && <BacktestPanel />}
 
       {/* ===== RAW VIEW ===== */}
       {subTab === 'raw' && (
