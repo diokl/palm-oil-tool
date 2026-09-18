@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/mpob-sync",
       "schedule": "0 3 12,22 * *"
+    },
+    {
+      "path": "/api/cron/market-data",
+      "schedule": "30 22 * * *"
     }
   ]
 }

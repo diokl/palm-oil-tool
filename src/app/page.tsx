@@ -986,6 +986,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
       {/* 월물 곡선 한 줄 요약 */}
       <TermStructurePanel compact />
 
+      {/* 매크로 한 줄 (환율·Brent·POGO) */}
+      <MacroPanel compact />
+
       {/* AI Analysis — hidden by default, unlocked via easter egg */}
           {showAI && <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
@@ -1449,6 +1452,120 @@ const MpobSignalCards = ({ rows, sd, onNavigate }: { rows: MpobSummaryRow[]; sd?
           <p className="text-xs text-slate-700 leading-relaxed">{generateSignal()}</p>
         </div>
       </div>
+    </div>
+  );
+};
+
+// ============ 매크로 (환율·원유·POGO) 패널 ============
+// compact: 대시보드 한 줄 스트립 / full: 대두유 탭 카드 (최신값·POGO 차트·수집 버튼)
+const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
+  const { canWrite } = useAuth();
+  const [snap, setSnap] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const load = async () => {
+    try { const r = await fetch('/api/market-data?days=180'); const j = await r.json(); if (!j.error) setSnap(j); }
+    catch (e) { console.error('market-data fetch failed', e); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+  const sync = async (days: number) => {
+    setSyncing(true); setMsg(null);
+    try {
+      const r = await fetch('/api/market-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days }) });
+      const j = await r.json(); setMsg(j.error ? `수집 실패: ${j.error}` : j.message); if (!j.error) load();
+    } catch { setMsg('수집 중 오류'); } finally { setSyncing(false); }
+  };
+  if (loading) return <Shimmer className={compact ? 'h-12' : 'h-40'} />;
+  const L = (s: string) => snap?.latest?.find((x: any) => x.series === s);
+  const fmtV = (x: any) => x?.value == null ? '-' : Number(x.value).toLocaleString('en-US', { maximumFractionDigits: x.series === 'USDKRW' ? 1 : x.series === 'BRENT' ? 2 : x.series === 'HEATING_OIL' ? 3 : 4 });
+  const chg = (x: any) => x?.change_pct == null ? null : <span className={`ml-1 text-[10px] ${x.change_pct > 0 ? 'text-rose-500' : x.change_pct < 0 ? 'text-blue-500' : 'text-slate-400'}`}>{x.change_pct > 0 ? '+' : ''}{x.change_pct}%</span>;
+  const pogo = snap?.pogo;
+  const pogoCls = (v: number | null) => v == null ? 'text-slate-400' : v > 0 ? 'text-rose-600' : 'text-emerald-600';
+  const hasData = snap && snap.latest?.some((x: any) => x.value != null);
+
+  if (compact) {
+    if (!hasData) return null;
+    return (
+      <div className="card p-3 bg-slate-50/60">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
+          <span className="font-semibold text-slate-800">💱 매크로</span>
+          <span>USD/KRW <b className="tabular-nums">{fmtV(L('USDKRW'))}</b>{chg(L('USDKRW'))}</span>
+          <span>USD/MYR <b className="tabular-nums">{fmtV(L('USDMYR'))}</b>{chg(L('USDMYR'))}</span>
+          <span>Brent <b className="tabular-nums">${fmtV(L('BRENT'))}</b>{chg(L('BRENT'))}</span>
+          {pogo?.vs_brent != null && <span title="팜유(USD/MT) − Brent(USD/MT 환산). 양수 = 팜유가 원유보다 비쌈 → 바이오디젤 수요 약화">POGO(팜유−원유) <b className={`tabular-nums ${pogoCls(pogo.vs_brent)}`}>{pogo.vs_brent > 0 ? '+' : ''}${formatNumber(pogo.vs_brent, 0)}</b></span>}
+          {pogo?.vs_ho != null && <span className="text-slate-500" title="팜유 − Heating Oil(경유 대용, USD/MT 환산)">vs 경유 {pogo.vs_ho > 0 ? '+' : ''}${formatNumber(pogo.vs_ho, 0)}</span>}
+          <span className="text-[10px] text-slate-400 ml-auto">{L('BRENT')?.date ?? ''} · 매일 07:30 자동</span>
+        </div>
+      </div>
+    );
+  }
+
+  const chart = (snap?.series ?? []).filter((p: any) => p.pogo_brent != null || p.palm != null).map((p: any) => ({ date: String(p.date).slice(5), palm: p.palm, brent: p.brent_mt, ho: p.ho_mt, pogo: p.pogo_brent }));
+  return (
+    <div className="card p-5 space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">💱 매크로 · 에너지 · 환율 (자동 수집)</h3>
+          <p className="text-[11px] text-slate-500 mt-0.5">환율 ECB(frankfurter) · 원유/경유/대두유 Yahoo Finance · 매일 07:30(KST) 자동. 대두유는 위 표에 yahoo_auto 로 들어가며 KoreaPDS 수동값이 우선합니다.</p>
+        </div>
+        {canWrite && (
+          <div className="flex gap-2 items-center">
+            <button onClick={() => sync(14)} disabled={syncing} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50">{syncing ? '수집 중...' : '🔄 지금 수집'}</button>
+            <button onClick={() => sync(730)} disabled={syncing} className="px-3 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 font-medium disabled:opacity-50" title="최근 2년 이력 백필">2년 백필</button>
+            {snap?.last_synced_at && <span className="text-[11px] text-slate-400">마지막 {new Date(snap.last_synced_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
+          </div>
+        )}
+      </div>
+      {msg && <div className="px-3 py-2 rounded-lg text-xs bg-emerald-50 text-emerald-700 border border-emerald-100">{msg}</div>}
+      {!hasData ? (
+        <p className="text-sm text-slate-500 text-center py-6">아직 수집된 데이터가 없습니다. '2년 백필'을 눌러 시작하세요.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {['USDKRW', 'USDMYR', 'USDCNY', 'BRENT', 'HEATING_OIL'].map(s => { const x = L(s); return (
+              <div key={s} className="rounded-xl border border-slate-100 p-3">
+                <p className="text-[11px] text-slate-500">{x?.label ?? s}</p>
+                <p className="text-lg font-bold text-slate-800 tabular-nums">{fmtV(x)}{chg(x)}</p>
+                <p className="text-[10px] text-slate-400">{x?.unit} · {x?.date ?? '-'}</p>
+              </div>
+            ); })}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-slate-100 p-3 bg-slate-50/50">
+              <p className="text-[11px] text-slate-500">POGO 스프레드 — 팜유 − Brent (USD/MT 환산, ×7.33)</p>
+              <p className={`text-2xl font-bold tabular-nums ${pogoCls(pogo?.vs_brent ?? null)}`}>{pogo?.vs_brent != null ? `${pogo.vs_brent > 0 ? '+' : ''}$${formatNumber(pogo.vs_brent, 0)}` : '-'}</p>
+              <p className="text-[11px] text-slate-500">팜유 ${formatNumber(snap.palm?.usd_mt, 0)} ({snap.palm?.date}) vs Brent ${formatNumber(pogo?.brent_usd_mt, 0)}/MT. 양수↑ = 팜유가 원유보다 비쌈 → 바이오디젤 전환 유인 약화(팜유 약세 요인), 음수 = 에너지 수요가 팜유 가격을 지지</p>
+            </div>
+            <div className="rounded-xl border border-slate-100 p-3 bg-slate-50/50">
+              <p className="text-[11px] text-slate-500">팜유 − Heating Oil (경유 대용, USD/MT 환산 ×315)</p>
+              <p className={`text-2xl font-bold tabular-nums ${pogoCls(pogo?.vs_ho ?? null)}`}>{pogo?.vs_ho != null ? `${pogo.vs_ho > 0 ? '+' : ''}$${formatNumber(pogo.vs_ho, 0)}` : '-'}</p>
+              <p className="text-[11px] text-slate-500">경유 ${formatNumber(pogo?.ho_usd_mt, 0)}/MT. 실제 POGO 는 가스오일(ICE) 기준이나 무료 소스가 없어 NYMEX Heating Oil 로 대용</p>
+            </div>
+          </div>
+          {chart.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-600 mb-2">팜유 · Brent · 경유 (USD/MT) 와 POGO 스프레드 — 최근 180일</p>
+              <ResponsiveContainer width="100%" height={260}>
+                <ComposedChart data={chart}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="l" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                  <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                  <Tooltip />
+                  <Legend />
+                  <Area yAxisId="r" type="monotone" dataKey="pogo" name="POGO(팜유−Brent)" stroke="#f59e0b" fill="#fde68a" fillOpacity={0.35} connectNulls />
+                  <Line yAxisId="l" type="monotone" dataKey="palm" name="팜유" stroke="#dc2626" strokeWidth={2} dot={false} connectNulls />
+                  <Line yAxisId="l" type="monotone" dataKey="brent" name="Brent(/MT)" stroke="#1e293b" strokeWidth={1.5} dot={false} connectNulls />
+                  <Line yAxisId="l" type="monotone" dataKey="ho" name="경유(/MT)" stroke="#64748b" strokeWidth={1} strokeDasharray="4 4" dot={false} connectNulls />
+                  <ReferenceLine yAxisId="r" y={0} stroke="#f59e0b" strokeDasharray="3 3" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
@@ -4655,6 +4772,9 @@ const SoybeanTab = () => {
           </div>
         )}
       </div>
+
+      {/* 매크로·에너지·환율 자동 수집 */}
+      <MacroPanel />
 
       {msg && (
         <div className={`px-4 py-2.5 rounded-lg text-sm border ${msg.t === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>{msg.m}</div>
