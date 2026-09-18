@@ -16,8 +16,8 @@ function getClient(): Sql {
       // Disabling prepare makes the driver send each query as a simple query.
       prepare: false,
       ssl: 'require',
-      max: 10,
-      idle_timeout: 20,
+      max: 4,               // 서버리스 인스턴스당 소량 (Supabase 풀러 슬롯 고갈 방지 — 10개일 때 ECHECKOUTTIMEOUT 장애)
+      idle_timeout: 10,
       connect_timeout: 10,
     });
   }
