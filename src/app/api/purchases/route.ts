@@ -305,7 +305,7 @@ export async function PUT(request: NextRequest) {
       if (!id || market_price_usd === undefined) {
         return NextResponse.json({ error: 'Required: id, market_price_usd' }, { status: 400 });
       }
-      await dbRun('UPDATE purchases SET market_price_usd = ? WHERE id = ?', [market_price_usd, id]);
+      await dbRun('UPDATE purchases SET market_price_usd = ?, market_price_source = ? WHERE id = ?', [market_price_usd, 'manual', id]);
       return NextResponse.json({ success: true });
     }
 
@@ -327,12 +327,12 @@ export async function PUT(request: NextRequest) {
       }
       if (product) {
         await dbRun(
-          'UPDATE purchases SET market_price_usd = ? WHERE shipment_month = ? AND product = ?',
+          "UPDATE purchases SET market_price_usd = ?, market_price_source = 'manual' WHERE shipment_month = ? AND product = ?",
           [market_price_usd, shipment_month, product]
         );
       } else {
         await dbRun(
-          'UPDATE purchases SET market_price_usd = ? WHERE shipment_month = ?',
+          "UPDATE purchases SET market_price_usd = ?, market_price_source = 'manual' WHERE shipment_month = ?",
           [market_price_usd, shipment_month]
         );
       }

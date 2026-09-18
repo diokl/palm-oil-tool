@@ -20,6 +20,7 @@ export interface InventoryRow {
   expected_usage: number | null;
   customs_volume: number | null;
   sales_volume?: number | null;   // 외부 판매 출고 (kg)
+  actual_ending_stock?: number | null; // 실재고 반영값 (입력 시 계산값 대신 채택, 이후 월은 이 값 기준으로 이어 계산)
   ending_stock: number | null;
   coverage_days: number | null;
   contract_price: string | null;

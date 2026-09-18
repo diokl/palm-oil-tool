@@ -115,10 +115,12 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, field, value, edited_by } = body;
 
-    const allowedFields = ['expected_usage', 'customs_volume', 'sales_volume', 'contract_price', 'contract_date'];
+    const allowedFields = ['expected_usage', 'customs_volume', 'sales_volume', 'actual_ending_stock', 'contract_price', 'contract_date'];
     if (!allowedFields.includes(field)) {
       return NextResponse.json({ error: `Field '${field}' is not editable` }, { status: 400 });
     }
+    // actual_ending_stock: 빈 값/null 이면 실재고 해제 (계산값으로 복귀)
+    const storeValue = field === 'actual_ending_stock' && (value === null || value === '' || value === undefined) ? null : value;
 
     // Get current value for audit log
     const current = await dbGet(`SELECT * FROM inventory WHERE id = ?`, [id]) as any;
@@ -129,8 +131,8 @@ export async function PUT(request: NextRequest) {
 
     // Update field + log in one batch (1 round trip)
     await dbBatchRun([
-      { sql: `UPDATE inventory SET ${field} = ?, updated_at = NOW(), updated_by = ? WHERE id = ?`, params: [value, user, id] },
-      { sql: `INSERT INTO edit_log (table_name, record_id, field_name, old_value, new_value, edited_by) VALUES ('inventory', ?, ?, ?, ?, ?)`, params: [id, field, String(oldValue), String(value), user] },
+      { sql: `UPDATE inventory SET ${field} = ?, updated_at = NOW(), updated_by = ? WHERE id = ?`, params: [storeValue, user, id] },
+      { sql: `INSERT INTO edit_log (table_name, record_id, field_name, old_value, new_value, edited_by) VALUES ('inventory', ?, ?, ?, ?, ?)`, params: [id, field, String(oldValue), String(storeValue), user] },
     ]);
 
     // Recalculate inventory — returns updated rows directly (no extra SELECT needed)

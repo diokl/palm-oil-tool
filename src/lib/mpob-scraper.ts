@@ -22,26 +22,67 @@ export interface MpobScrapedRecord {
   sort_order: number;
 }
 
-// Article pages (year-specific). The iframe `val` is extracted live from each
-// page so monthly renumbering on MPOB's side does not break the scraper.
-const REPORT_PAGES: { category: string; url: string }[] = [
-  {
-    category: 'stock',
-    url: `${MPOB_BASE}/index.php/stock/336-stocks-2026/1234-stock-of-selected-processed-palm-oil-at-refinery-2026`,
-  },
-  {
-    category: 'production',
-    url: `${MPOB_BASE}/index.php/production/335-production-2026/1229-production-of-selected-processed-palm-oil-2026`,
-  },
-  {
-    category: 'export_port',
-    url: `${MPOB_BASE}/index.php/export/338-export-2026/1240-palm-oil-export-by-major-ports-2026`,
-  },
-  {
-    category: 'export_product',
-    url: `${MPOB_BASE}/index.php/export/338-export-2026/1239-monthly-export-of-oil-palm-products-2026`,
-  },
+// Article pages are year-specific and their Joomla ids change every year
+// (e.g. /stock/336-stocks-2026/1234-stock-of-...-2026). To survive the year
+// roll-over we discover the current year's article URL from the section page
+// at runtime (section → '<id>-<yearSlug>-<year>' → '<id>-<articleSlug>-<year>'),
+// and fall back to the known 2026 URLs when discovery fails.
+// The iframe `val` is still extracted live from each article page so monthly
+// renumbering on MPOB's side does not break the scraper.
+interface ReportDef { category: string; section: string; yearSlug: string; articleSlug: string }
+const REPORT_DEFS: ReportDef[] = [
+  { category: 'stock',          section: 'stock',      yearSlug: 'stocks',     articleSlug: 'stock-of-selected-processed-palm-oil-at-refinery' },
+  { category: 'production',     section: 'production', yearSlug: 'production', articleSlug: 'production-of-selected-processed-palm-oil' },
+  { category: 'export_port',    section: 'export',     yearSlug: 'export',     articleSlug: 'palm-oil-export-by-major-ports' },
+  { category: 'export_product', section: 'export',     yearSlug: 'export',     articleSlug: 'monthly-export-of-oil-palm-products' },
 ];
+const FALLBACK_URLS_2026: Record<string, string> = {
+  stock:          `${MPOB_BASE}/index.php/stock/336-stocks-2026/1234-stock-of-selected-processed-palm-oil-at-refinery-2026`,
+  production:     `${MPOB_BASE}/index.php/production/335-production-2026/1229-production-of-selected-processed-palm-oil-2026`,
+  export_port:    `${MPOB_BASE}/index.php/export/338-export-2026/1240-palm-oil-export-by-major-ports-2026`,
+  export_product: `${MPOB_BASE}/index.php/export/338-export-2026/1239-monthly-export-of-oil-palm-products-2026`,
+};
+
+export interface ReportPage { category: string; url: string; year: number; discovered: boolean }
+
+function absolutize(href: string): string {
+  const h = href.replace(/&amp;/g, '&');
+  if (/^https?:\/\//i.test(h)) return h;
+  return `${MPOB_BASE}${h.startsWith('/') ? '' : '/'}${h}`;
+}
+
+// 섹션 페이지 → 연도 카테고리 링크 → 기사 링크 순으로 현재 연도 기사 URL 탐색.
+// 1월 등 새 연도 페이지가 아직 없으면 전년도로 재시도. 모두 실패 시 2026 고정 URL.
+async function resolveReportPages(jar: CookieJar, now = new Date()): Promise<ReportPage[]> {
+  const yearsToTry = [now.getFullYear(), now.getFullYear() - 1];
+  const sectionCache = new Map<string, string>();
+  const pages: ReportPage[] = [];
+
+  for (const def of REPORT_DEFS) {
+    let found: ReportPage | null = null;
+    for (const year of yearsToTry) {
+      try {
+        let sectionHtml = sectionCache.get(def.section);
+        if (sectionHtml == null) {
+          sectionHtml = await getText(jar, `${MPOB_BASE}/index.php/${def.section}`);
+          sectionCache.set(def.section, sectionHtml);
+        }
+        // 1) 연도 카테고리 링크 (없으면 섹션 페이지에서 바로 기사 링크 탐색)
+        const yearRe = new RegExp(`href="([^"]*?/index\\.php/${def.section}/\\d+-${def.yearSlug}-${year}(?:[/?#"][^"]*)?)"`, 'i');
+        const ym = sectionHtml.match(yearRe);
+        const listingHtml = ym ? await getText(jar, absolutize(ym[1])) : sectionHtml;
+        // 2) 기사 링크
+        const artRe = new RegExp(`href="([^"]*?/\\d+-${def.articleSlug}-${year}(?:[/?#"][^"]*)?)"`, 'i');
+        const am = listingHtml.match(artRe);
+        if (am) { found = { category: def.category, url: absolutize(am[1]), year, discovered: true }; break; }
+      } catch {
+        // 다음 연도/폴백으로
+      }
+    }
+    pages.push(found ?? { category: def.category, url: FALLBACK_URLS_2026[def.category], year: 2026, discovered: false });
+  }
+  return pages;
+}
 
 // ---------- tiny cookie jar ----------
 class CookieJar {
@@ -187,7 +228,7 @@ const SP_PRODUCTS: { name: string; sort: number }[] = [
 
 // Stock / Production: two tables (Jan-Jun, Jul-Dec), each row is
 // [name, 2025, 2026, 2025, 2026, ...] for 6 months + 2 average cells.
-function parseStockProduction(html: string, category: string): MpobScrapedRecord[] {
+function parseStockProduction(html: string, category: string, year: number): MpobScrapedRecord[] {
   const rows = tableRows(html);
   const sortOf = new Map(SP_PRODUCTS.map((p) => [p.name, p.sort]));
   const seen = new Map<string, number>();
@@ -202,8 +243,9 @@ function parseStockProduction(html: string, category: string): MpobScrapedRecord
       const month = startMonth + i;
       const v25 = num(r[1 + i * 2]);
       const v26 = num(r[1 + i * 2 + 1]);
-      if (v25 != null) recs.push({ category, item_name: name, year: 2025, month, value: v25, sort_order: sortOf.get(name)! });
-      if (v26 != null) recs.push({ category, item_name: name, year: 2026, month, value: v26, sort_order: sortOf.get(name)! });
+      // 열 순서: [name, 전년, 당년, 전년, 당년, ...] — 보고서 연도(year) 기준
+      if (v25 != null) recs.push({ category, item_name: name, year: year - 1, month, value: v25, sort_order: sortOf.get(name)! });
+      if (v26 != null) recs.push({ category, item_name: name, year, month, value: v26, sort_order: sortOf.get(name)! });
     }
   }
   return recs;
@@ -274,36 +316,39 @@ function parseExportProduct(html: string, year: number): MpobScrapedRecord[] {
 // ---------- public API ----------
 export interface MpobScrapeResult {
   records: MpobScrapedRecord[];
-  summary: { category: string; val: string | null; count: number; error?: string }[];
+  summary: { category: string; val: string | null; count: number; error?: string; url?: string; discovered?: boolean }[];
 }
 
 export async function scrapeMPOBData(): Promise<MpobScrapeResult> {
   const jar = new CookieJar();
   await login(jar);
 
+  // 연도별 기사 URL 탐색 (현재 연도 → 전년도 → 2026 고정 URL 순)
+  const reportPages = await resolveReportPages(jar);
+
   // 4개 카테고리를 병렬로 수집 (순차로 하면 Vercel 60초 제한 초과 → 504).
   const perCategory = await Promise.all(
-    REPORT_PAGES.map(async (page): Promise<{ records: MpobScrapedRecord[]; summary: MpobScrapeResult['summary'][number] }> => {
+    reportPages.map(async (page): Promise<{ records: MpobScrapedRecord[]; summary: MpobScrapeResult['summary'][number] }> => {
       try {
         const pageHtml = await getText(jar, page.url);
         const val = extractReportVal(pageHtml);
         if (!val) {
-          return { records: [], summary: { category: page.category, val: null, count: 0, error: 'iframe report val을 찾지 못함' } };
+          return { records: [], summary: { category: page.category, val: null, count: 0, error: 'iframe report val을 찾지 못함', url: page.url, discovered: page.discovered } };
         }
         const reportHtml = await getText(jar, `${MPOB_BASE}/stat/web_report1.php?val=${val}`);
-        const year = parseInt(val.slice(0, 4), 10) || new Date().getFullYear();
+        const year = parseInt(val.slice(0, 4), 10) || page.year;
 
         let recs: MpobScrapedRecord[] = [];
         if (page.category === 'stock' || page.category === 'production') {
-          recs = parseStockProduction(reportHtml, page.category);
+          recs = parseStockProduction(reportHtml, page.category, year);
         } else if (page.category === 'export_port') {
           recs = parseExportPort(reportHtml, year);
         } else if (page.category === 'export_product') {
           recs = parseExportProduct(reportHtml, year);
         }
-        return { records: recs, summary: { category: page.category, val, count: recs.length } };
+        return { records: recs, summary: { category: page.category, val, count: recs.length, url: page.url, discovered: page.discovered } };
       } catch (err: any) {
-        return { records: [], summary: { category: page.category, val: null, count: 0, error: err.message } };
+        return { records: [], summary: { category: page.category, val: null, count: 0, error: err.message, url: page.url, discovered: page.discovered } };
       }
     }),
   );

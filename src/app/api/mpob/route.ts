@@ -16,9 +16,12 @@ export async function GET(request: NextRequest) {
       const categories = await dbAll(
         `SELECT DISTINCT category FROM mpob_data ORDER BY category`
       );
+      // 마지막 동기화 시각 (수동/자동 공통 — UPSERT 시 updated_at 갱신)
+      const last = await dbAll(`SELECT MAX(updated_at) AS last_synced_at FROM mpob_data`);
       return NextResponse.json({
         years: years.map((y: any) => y.year),
         categories: categories.map((c: any) => c.category),
+        last_synced_at: last[0]?.last_synced_at ?? null,
       });
     }
 

@@ -136,6 +136,7 @@ interface InventoryItem {
   expected_usage: number;
   customs_volume: number;
   sales_volume?: number;   // 외부 판매 출고 (kg)
+  actual_ending_stock?: number | null; // 실재고 반영값 (입력 시 계산값 대신 채택, 이후 월은 이 값 기준)
   ending_stock: number;
   coverage_days: number;
   contract_price: string | number;
@@ -2614,7 +2615,7 @@ const InventoryTab = () => {
     }
   };
 
-  const handleCellSave = async (rowId: number, field: string, value: number) => {
+  const handleCellSave = async (rowId: number, field: string, value: number | null) => {
     // 1) Optimistic update: recalculate locally for instant UI feedback
     setInventoryData(prev => {
       if (prev.length === 0) return prev;
@@ -2635,7 +2636,9 @@ const InventoryTab = () => {
         const usage = rows[i].expected_usage ?? 0;
         const customs = rows[i].customs_volume ?? 0;
         const sales = rows[i].sales_volume ?? 0;
-        rows[i].ending_stock = prevStock + customs - usage - sales;
+        const actual = rows[i].actual_ending_stock;
+        // 실재고가 입력된 달은 그 값을 기말재고로 채택 (서버 recalcInventory 와 동일 규칙)
+        rows[i].ending_stock = actual != null ? Number(actual) : prevStock + customs - usage - sales;
         rows[i].coverage_days = usage > 0 ? Math.round((rows[i].ending_stock / usage) * 10) / 10 : 0;
         prevStock = rows[i].ending_stock;
       }
@@ -2817,7 +2820,10 @@ const InventoryTab = () => {
                     판매량(kg)
                     <span className="ml-1 text-blue-400">✎</span>
                   </th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">기말재고(kg)</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    기말재고(kg)
+                    <span className="ml-1 text-violet-400" title="클릭해 실재고를 입력하면 계산값 대신 반영됩니다">✎</span>
+                  </th>
                   <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">재고회전(개월)</th>
                   <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
                     계약단가
@@ -2865,7 +2871,19 @@ const InventoryTab = () => {
                       (row.ending_stock ?? 0) < 0 ? 'text-rose-600 bg-rose-50/50' :
                       (row.ending_stock ?? 0) < 2000000 ? 'text-amber-600 bg-amber-50/50' : 'text-slate-800'
                     }`}>
-                      {formatNumber(row.ending_stock)}
+                      {/* 기말재고: 클릭해 실재고(수불 기준)를 입력하면 계산값 대신 반영되고, 다음 달부터 그 값 기준으로 이어 계산 */}
+                      <div className="flex items-center justify-end gap-1">
+                        {row.actual_ending_stock != null && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-violet-100 text-violet-600 font-medium" title="실재고 반영값 (계산값 대신 사용)">실재고</span>
+                        )}
+                        <EditableCell
+                          value={row.actual_ending_stock != null ? Number(row.actual_ending_stock) : row.ending_stock}
+                          onSave={(val) => handleCellSave(row.id, 'actual_ending_stock', val)}
+                        />
+                        {canWrite && row.actual_ending_stock != null && (
+                          <button onClick={() => handleCellSave(row.id, 'actual_ending_stock', null)} className="text-slate-300 hover:text-rose-500 text-xs" title="실재고 해제 (계산값으로 복귀)">✕</button>
+                        )}
+                      </div>
                     </td>
                     <td className={`px-5 py-3 tabular-nums font-semibold text-center ${
                       (row.coverage_days ?? 0) < 1.5 ? 'text-rose-600' : (row.coverage_days ?? 0) < 2.5 ? 'text-amber-600' : 'text-emerald-600'
@@ -3217,6 +3235,13 @@ const PurchasesTab = () => {
   const [exRateInput, setExRateInput] = useState('');
   const [savingMarket, setSavingMarket] = useState(false);
 
+  // 시황가 자동 매칭 (FCPO DB → 선적월 월평균)
+  const [matchOpen, setMatchOpen] = useState(false);
+  const [matchRows, setMatchRows] = useState<any[]>([]);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [matchMsg, setMatchMsg] = useState<string | null>(null);
+  const [matchIncludeForward, setMatchIncludeForward] = useState(false);
+
   // Expanded month in prebuy detail (show individual purchases)
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
@@ -3516,6 +3541,44 @@ const PurchasesTab = () => {
       console.error('Failed to update market price:', error);
     } finally {
       setSavingMarket(false);
+    }
+  };
+
+  // 시황가 자동 매칭: 제안값 조회
+  const loadMarketMatch = async () => {
+    setMatchLoading(true);
+    setMatchMsg(null);
+    try {
+      const res = await fetch('/api/purchases/market-match');
+      const json = await res.json();
+      if (json.error) setMatchMsg(`조회 실패: ${json.error}`);
+      else setMatchRows(json.data || []);
+    } catch (error) {
+      console.error('Failed to load market match:', error);
+      setMatchMsg('조회 중 오류가 발생했습니다.');
+    } finally {
+      setMatchLoading(false);
+    }
+  };
+
+  // 시황가 자동 매칭: 적용 (fill = 미입력만, overwrite = 수동 입력 제외 전체)
+  const applyMarketMatch = async (mode: 'fill' | 'overwrite') => {
+    setMatchLoading(true);
+    try {
+      const res = await fetch('/api/purchases/market-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, include_forward: matchIncludeForward }),
+      });
+      const json = await res.json();
+      setMatchMsg(json.error ? `적용 실패: ${json.error}` : json.message);
+      if (!json.error) { fetchPrebuy(); }
+    } catch (error) {
+      console.error('Failed to apply market match:', error);
+      setMatchMsg('적용 중 오류가 발생했습니다.');
+    } finally {
+      setMatchLoading(false);
+      loadMarketMatch();
     }
   };
 
@@ -4017,6 +4080,13 @@ const PurchasesTab = () => {
                 제외 초기화 ({excludedMonths.size})
               </button>
             )}
+            {canWrite && (
+              <button onClick={() => { const next = !matchOpen; setMatchOpen(next); if (next) loadMarketMatch(); }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${matchOpen ? 'bg-violet-600 text-white' : 'bg-violet-50 text-violet-700 hover:bg-violet-100'}`}
+                title="FCPO DB에서 선적월별 시황가(해당 월물 월평균)를 자동으로 계산해 채웁니다">
+                ⚡ 시황가 자동 매칭
+              </button>
+            )}
 
             <div className="ml-auto flex items-center gap-2 text-xs">
               <span className="text-slate-500">기간:</span>
@@ -4031,6 +4101,65 @@ const PurchasesTab = () => {
               </select>
             </div>
           </div>
+
+          {/* ===== 시황가 자동 매칭 패널 ===== */}
+          {matchOpen && (
+            <div className="card p-5 border-violet-100 bg-violet-50/30 space-y-3 animate-fade-in">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700">시황가 자동 매칭 (FCPO DB)</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">규칙: 선적월 동안 거래된 해당 월물 종가(USD/MT, RBD 기준)의 평균 = 엑셀 '구매 당월시황'. RSPO/관리팜유 프리미엄은 효과 계산 시 자동 가산됩니다.</p>
+                </div>
+                <button onClick={() => setMatchOpen(false)} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
+              </div>
+              {matchLoading && matchRows.length === 0 ? (
+                <p className="text-xs text-slate-400">FCPO DB 조회 중...</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-white/60 border-b border-slate-200">
+                        <th className="px-3 py-2 text-left font-semibold text-slate-500">선적월</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-500">제안 시황가</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-500">근거</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-500">현재 입력값</th>
+                        <th className="px-3 py-2 text-center font-semibold text-slate-500">입력/전체(건)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {matchRows.map((r: any) => {
+                        const s = r.suggestion;
+                        const basis = s?.basis;
+                        const basisLabel = basis === 'month_avg' ? '월평균(확정)' : basis === 'partial_avg' ? '진행중 평균(잠정)' : basis === 'forward' ? '선물 전망치' : '시세 없음';
+                        const basisCls = basis === 'month_avg' ? 'bg-emerald-50 text-emerald-700' : basis === 'partial_avg' ? 'bg-amber-50 text-amber-700' : basis === 'forward' ? 'bg-slate-100 text-slate-500' : 'bg-rose-50 text-rose-600';
+                        const cur = (r.current_prices || []).map((v: number) => `$${formatNumber(v, 2)}`).join(', ');
+                        return (
+                          <tr key={r.shipment_month} className="hover:bg-white/60">
+                            <td className="px-3 py-1.5 font-medium text-slate-700">{r.shipment_month}</td>
+                            <td className="px-3 py-1.5 tabular-nums text-right font-semibold text-slate-800">{s?.market_price != null ? `$${formatNumber(s.market_price, 2)}` : '-'}</td>
+                            <td className="px-3 py-1.5 text-slate-500">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium mr-1.5 ${basisCls}`}>{basisLabel}</span>
+                              {s && s.days > 0 && <span className="text-[10px]">{s.days}일 · {s.first_date}~{s.last_date} · ${formatNumber(s.min, 1)}~${formatNumber(s.max, 1)}</span>}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-right text-slate-600">{cur || <span className="text-slate-300 italic">미입력</span>}{r.manual > 0 && <span className="ml-1 text-[9px] text-blue-500" title="수동 입력 건 (전체 갱신 시 보존)">✎{r.manual}</span>}</td>
+                            <td className="px-3 py-1.5 tabular-nums text-center text-slate-600">{r.filled}/{r.purchases}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="flex items-center gap-1 text-xs text-slate-600 mr-2">
+                  <input type="checkbox" checked={matchIncludeForward} onChange={e => setMatchIncludeForward(e.target.checked)} /> 선적월 미도래(전망치)도 반영
+                </label>
+                <button onClick={() => applyMarketMatch('fill')} disabled={matchLoading} className="px-3 py-1.5 text-xs bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 font-medium">미입력만 채우기</button>
+                <button onClick={() => { if (window.confirm('수동 입력(✎)을 제외한 모든 건의 시황가를 FCPO 기준으로 갱신합니다. 계속할까요?')) applyMarketMatch('overwrite'); }} disabled={matchLoading} className="px-3 py-1.5 text-xs bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 font-medium">전체 갱신 (수동 입력 보존)</button>
+                {matchMsg && <span className="text-xs px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700">{matchMsg}</span>}
+              </div>
+            </div>
+          )}
 
           {/* ===== 총 효과 분석 — Summary Table ===== */}
           {prebuyView === 'total' && (
@@ -5478,6 +5607,7 @@ const MPOBTab = () => {
   const [loading, setLoading] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
   const [editCell, setEditCell] = useState<{ cat: string; item: string; month: number; field: 'value' | 'value_rm' } | null>(null);
   const [editValue, setEditValue] = useState('');
   const editRef = useRef<HTMLInputElement>(null);
@@ -5499,6 +5629,7 @@ const MPOBTab = () => {
       const res = await fetch('/api/mpob');
       const json = await res.json();
       if (json.years?.length) setAvailableYears(json.years);
+      if (json.last_synced_at) setLastSynced(json.last_synced_at);
     } catch {}
   };
 
@@ -5843,6 +5974,9 @@ const MPOBTab = () => {
           <button onClick={handleSync} disabled={syncing} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50" title="MPOB BEPI에 로그인해 재고·생산·수출(항구/품목) 최신 수치를 자동으로 가져옵니다">
             {syncing ? 'MPOB 가져오는 중...' : '🔄 MPOB 자동 가져오기'}
           </button>
+          <span className="self-center text-[11px] text-slate-400" title="Vercel Cron: 매월 12일·22일 12:00(KST) 자동 동기화">
+            {lastSynced ? `마지막 동기화 ${new Date(lastSynced).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ` : ''}자동: 매월 12·22일
+          </span>
           <button onClick={() => setBulkOpen(true)} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">
             Bulk 붙여넣기
           </button>

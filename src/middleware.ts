@@ -10,6 +10,7 @@ const PUBLIC_PATHS = [
   '/api/auth/check',
   '/api/auth/register',
   '/api/news/ingest', // 북마클릿 크로스오리진 인제스트 — 자체 토큰 인증 + CORS
+  '/api/cron/',       // Vercel Cron 호출 — 라우트 내부에서 CRON_SECRET 검증
   '/_next',
   '/favicon.ico',
 ];

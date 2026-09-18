@@ -1,37 +1,78 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbAll } from '@/lib/db';
-import { seedInitialData } from '@/lib/seed-data';
+import { dbAll, dbGet, dbRun } from '@/lib/db';
 import { calculateBoxRange } from '@/lib/box-range';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
+export const dynamic = 'force-dynamic';
+
+// 분석 대상 월물: FCPO DB 최신 거래일에 시세가 있는 월물 중 현재월 이후 가장 가까운 3개.
+// (이전에는 '2026-04/05/06' 고정이라 시간이 지나면 만기 월물을 분석하는 문제가 있었음)
+async function resolveTargetMonths(now = new Date()): Promise<{ latestDate: string | null; months: string[] }> {
+  const latest = await dbGet(`SELECT date::text AS date FROM fcpo_settlement ORDER BY date DESC LIMIT 1`) as { date: string } | undefined;
+  if (!latest) return { latestDate: null, months: [] };
+  const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const rows = await dbAll(
+    `SELECT DISTINCT contract_month FROM fcpo_settlement
+     WHERE date = ? AND contract_month >= ? AND settlement_usd IS NOT NULL
+     ORDER BY contract_month LIMIT 3`,
+    [latest.date, curYm],
+  ) as { contract_month: string }[];
+  let months = rows.map(r => r.contract_month);
+  if (months.length === 0) {
+    // 최신 거래일에 현재월 이후 월물이 없으면 그 날의 최근월물 3개라도 사용
+    const fallback = await dbAll(
+      `SELECT DISTINCT contract_month FROM fcpo_settlement WHERE date = ? ORDER BY contract_month DESC LIMIT 3`,
+      [latest.date],
+    ) as { contract_month: string }[];
+    months = fallback.map(r => r.contract_month).sort();
+  }
+  return { latestDate: String(latest.date).slice(0, 10), months };
+}
+
 export async function POST(request: NextRequest) {
   try {
-    try { await seedInitialData(); } catch (e: any) { console.warn('Seed skipped:', e.message); }
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const { latestDate, months } = await resolveTargetMonths(now);
+    if (months.length === 0) {
+      return NextResponse.json({ error: 'FCPO 시세 데이터가 없어 분석할 수 없습니다.' }, { status: 400 });
+    }
+    const primaryMonth = months[0];
 
     // Gather context
     const recentNews = await dbAll(
       `SELECT date, content, sentiment, impact FROM news ORDER BY date DESC LIMIT 10`
     );
 
+    const placeholders = months.map(() => '?').join(', ');
     const recentPrices = await dbAll(
       `SELECT date, contract_month, settlement_usd FROM fcpo_settlement
-       WHERE contract_month IN ('2026-04', '2026-05', '2026-06')
-       ORDER BY date DESC LIMIT 30`
+       WHERE contract_month IN (${placeholders})
+       ORDER BY date DESC, contract_month LIMIT 30`,
+      months,
     );
 
     const inventory = await dbAll(
       `SELECT product, year, month, ending_stock, coverage_days
-       FROM inventory WHERE year = 2026 ORDER BY product, month`
+       FROM inventory WHERE year = ? ORDER BY product, month`,
+      [currentYear],
     );
 
-    const boxRange = await calculateBoxRange('2026-04');
+    const boxRange = await calculateBoxRange(primaryMonth);
 
     const alerts = await dbAll(
       `SELECT * FROM alerts WHERE is_active = 1 ORDER BY alert_level`
     );
 
+    const strategyTemplate = months
+      .map((m, i) => i === 0
+        ? `    {"month": "${m}", "action": "전량구매/적극매수/모니터링/대기 중 하나", "target_price": 목표단가숫자, "volume_mt": 권장물량숫자, "reason": "이유 1문장"}`
+        : `    {"month": "${m}", "action": "...", "target_price": 숫자, "volume_mt": 숫자, "reason": "..."}`)
+      .join(',\n');
+
     const prompt = `당신은 삼양식품 원재료구매팀의 팜유 구매 전문 분석가입니다. 아래 데이터를 종합하여 현재 시장 상황과 구매 전략을 분석해주세요.
+기준일: ${latestDate} (FCPO 최신 거래일) / 분석 대상 월물: ${months.join(', ')}
 
 ## 최근 시황 뉴스
 ${JSON.stringify(recentNews, null, 2)}
@@ -39,10 +80,10 @@ ${JSON.stringify(recentNews, null, 2)}
 ## 최근 FCPO 가격 (USD/MT)
 ${JSON.stringify(recentPrices.slice(0, 15), null, 2)}
 
-## 재고 현황 (2026년)
+## 재고 현황 (${currentYear}년)
 ${JSON.stringify(inventory, null, 2)}
 
-## 박스권 분석 (2026-04월물)
+## 박스권 분석 (${primaryMonth}월물)
 ${boxRange ? JSON.stringify({
   current_price: boxRange.current_price,
   zone: boxRange.current_zone,
@@ -60,9 +101,7 @@ ${JSON.stringify(alerts, null, 2)}
   "market_summary": "현재 시장 상황 요약 (2-3문장)",
   "buy_recommendation": "구매 관점 의견 (2-3문장)",
   "monthly_strategy": [
-    {"month": "2026-04", "action": "전량구매/적극매수/모니터링/대기 중 하나", "target_price": 목표단가숫자, "volume_mt": 권장물량숫자, "reason": "이유 1문장"},
-    {"month": "2026-05", "action": "...", "target_price": 숫자, "volume_mt": 숫자, "reason": "..."},
-    {"month": "2026-06", "action": "...", "target_price": 숫자, "volume_mt": 숫자, "reason": "..."}
+${strategyTemplate}
   ],
   "risk_factors": ["리스크 요인 1", "리스크 요인 2"],
   "action_items": ["조치사항 1", "조치사항 2"],
@@ -78,23 +117,27 @@ monthly_strategy의 각 월에 대해:
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       // Return mock analysis if no API key
+      const cur = boxRange?.current_price ?? 0;
       const mockResult = {
-        market_summary: "현재 팜유 시장은 단기 약세 국면입니다. 말레이시아 재고 부담과 인도 수입관세 이슈가 하방 압력을 가하고 있으나, 인도네시아 B50 시행 기대가 하단을 지지하고 있습니다.",
-        buy_recommendation: "현재가가 박스권 전량구매 구간에 위치하고 있어 매수 적기로 판단됩니다. RBD 8월 재고 소진이 예상되므로 5월 선적물 확보가 시급합니다.",
-        monthly_strategy: [
-          { month: "2026-04", action: "전량구매", target_price: 1070, volume_mt: 2600, reason: "박스권 하단 구간, 재고 소진 임박" },
-          { month: "2026-05", action: "적극매수", target_price: 1080, volume_mt: 2000, reason: "B50 시행 전 선제적 물량 확보 필요" },
-          { month: "2026-06", action: "모니터링", target_price: 1050, volume_mt: 1000, reason: "B50 시행에 따른 가격 변동성 관찰 후 결정" },
-        ],
-        risk_factors: ["인도 수입관세 인상 시 수요 감소 가능", "말레이시아 재고 추가 증가 시 하방 압력"],
-        action_items: ["5월 선적물 RBD 2,600톤 전량구매 검토", "RSPO 4월 선적물 400톤 추가 확보"],
-        outlook: "단기 약세 지속 전망이나 B50 시행(6월)을 앞두고 중기적으로 반등 가능성 있음."
+        market_summary: `(API 키 미설정 — 예시 분석) ${latestDate} 기준 ${primaryMonth}월물 ${cur ? `$${cur}` : ''} 수준입니다. 실제 분석을 위해 ANTHROPIC_API_KEY 를 설정하세요.`,
+        buy_recommendation: `현재 박스권 구간: ${boxRange?.current_zone ?? '데이터 부족'}.`,
+        monthly_strategy: months.map((m, i) => ({
+          month: m,
+          action: i === 0 ? '모니터링' : '대기',
+          target_price: cur ? Math.round(cur * 0.98) : 0,
+          volume_mt: 0,
+          reason: '예시 데이터',
+        })),
+        risk_factors: ['API 키 미설정 상태의 예시 결과입니다'],
+        action_items: ['ANTHROPIC_API_KEY 환경변수 설정'],
+        outlook: '-',
+        analysis_months: months,
+        as_of: latestDate,
       };
 
-      const { dbRun } = await import('@/lib/db');
       await dbRun(
         `INSERT INTO analyses (analysis_type, input_data, result, model) VALUES ('market', ?, ?, 'mock')`,
-        [JSON.stringify({ news_count: recentNews.length }), JSON.stringify(mockResult)]
+        [JSON.stringify({ news_count: recentNews.length, months }), JSON.stringify(mockResult)]
       );
 
       return NextResponse.json(mockResult);
@@ -111,11 +154,12 @@ monthly_strategy의 각 월에 대해:
     // Extract JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { market_summary: text };
+    result.analysis_months = months;
+    result.as_of = latestDate;
 
-    const { dbRun } = await import('@/lib/db');
     await dbRun(
       `INSERT INTO analyses (analysis_type, input_data, result, model) VALUES ('market', ?, ?, ?)`,
-      [JSON.stringify({ news_count: recentNews.length }), JSON.stringify(result), ANTHROPIC_MODEL]
+      [JSON.stringify({ news_count: recentNews.length, months }), JSON.stringify(result), ANTHROPIC_MODEL]
     );
 
     return NextResponse.json(result);

@@ -47,6 +47,14 @@ export async function syncCustomsVolumeFromPurchases(
   );
 
   await recalcInventory(product, customs.year);
+  // 12월 통관이면 다음 해 기초재고가 바뀌므로 다음 해도 재계산
+  if (customs.month === 12) {
+    const dec = await dbGet(
+      `SELECT ending_stock FROM inventory WHERE product = ? AND year = ? AND month = 12`,
+      [product, customs.year],
+    ) as { ending_stock: number } | undefined;
+    await recalcInventory(product, customs.year + 1, Number(dec?.ending_stock ?? 0));
+  }
 }
 
 // 여러 (product, shipment_month)에 대해 중복 제거 후 일괄 동기화.
@@ -90,10 +98,15 @@ export async function recalcInventory(
   const updates: { id: number; endingStock: number; coverageDays: number }[] = [];
 
   for (const row of rows) {
-    const usage = row.expected_usage ?? 0;
-    const customs = row.customs_volume ?? 0;
-    const sales = row.sales_volume ?? 0;  // 외부 판매 출고
-    const endingStock = prevStock + customs - usage - sales;
+    const usage = Number(row.expected_usage ?? 0);
+    const customs = Number(row.customs_volume ?? 0);
+    const sales = Number(row.sales_volume ?? 0);  // 외부 판매 출고
+    // 실재고(actual_ending_stock)가 입력된 달은 계산값 대신 실재고를 기말재고로 채택하고
+    // 다음 달부터 그 값을 기준으로 이어서 계산한다 (엑셀 '삼양베이커수불 재고 적용' 하드코딩과 동일).
+    const actual = row.actual_ending_stock;
+    const endingStock = actual != null && actual !== undefined && !Number.isNaN(Number(actual))
+      ? Number(actual)
+      : prevStock + customs - usage - sales;
     const coverageDays = usage > 0 ? Math.round((endingStock / usage) * 10) / 10 : 0;
     updates.push({ id: row.id!, endingStock, coverageDays });
     prevStock = endingStock;
@@ -149,7 +162,7 @@ export async function generateAlerts(): Promise<Alert[]> {
           is_active: true,
         });
       } else if (currentRow && usage === 0) {
-        // 운영 시작 전: 정보성 알림 (normal level)
+        // 예상소요 0: 운영 시작 전(MANAGED 상반기) 또는 관리팜유 전환으로 소요 종료(RSPO 하반기) — 정보성 알림
         alerts.push({
           product,
           alert_level: 'normal',
@@ -158,7 +171,7 @@ export async function generateAlerts(): Promise<Alert[]> {
           recommended_shipment: null,
           current_price: null,
           box_range_zone: null,
-          message: `${product} ${currentYear}-${String(currentMonth).padStart(2,'0')} 운영 시작 전`,
+          message: `${product} ${currentYear}-${String(currentMonth).padStart(2,'0')} 예상소요 없음 (운영 전 또는 관리팜유 전환) -- 알림 대상 아님`,
           action_taken: null,
           is_active: true,
         });
