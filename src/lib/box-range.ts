@@ -49,6 +49,8 @@ export async function calculateBoxRange(
   currentPrice?: number,
   asOfDate?: string,
   mode: BoxRangeMode = '일반',
+  /** 이미 조회한 (date ASC) 시세를 넘기면 DB 조회 생략 — 대시보드가 여러 월물을 쿼리 1개로 처리할 때 사용 */
+  prefetched?: { date: string; settlement_usd: number }[],
 ): Promise<BoxRangeResult | null> {
   // Get all prices for this contract month, ordered by date
   const query = asOfDate
@@ -59,7 +61,9 @@ export async function calculateBoxRange(
        WHERE contract_month = ? AND settlement_usd IS NOT NULL
        ORDER BY date ASC`;
   const params = asOfDate ? [contractMonth, asOfDate] : [contractMonth];
-  const prices = await dbAll(query, params) as { date: string; settlement_usd: number }[];
+  const prices = prefetched
+    ? prefetched.filter(p => !asOfDate || p.date <= asOfDate).map(p => ({ date: p.date, settlement_usd: Number(p.settlement_usd) }))
+    : await dbAll(query, params) as { date: string; settlement_usd: number }[];
 
   if (prices.length < 10) return null;
 

@@ -11,8 +11,32 @@ import type { Product } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
+// 인스턴스 메모리 캐시(60초) + 동시 요청 합치기.
+// 대시보드는 쿼리 20여 개를 묶어 실행하므로, 여러 탭·폴링·재시도가 겹치면 풀러 커넥션이 고갈되어 504 가 났다.
+const CACHE_TTL_MS = 60_000;
+let cache: { at: number; data: Record<string, any> } | null = null;
+let inflight: Promise<Record<string, any>> | null = null;
+
 export async function GET() {
   try {
+    if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
+      return NextResponse.json({ ...cache.data, _cached_at: new Date(cache.at).toISOString() });
+    }
+    if (!inflight) {
+      inflight = buildDashboard().finally(() => { inflight = null; });
+    }
+    const data = await inflight;
+    cache = { at: Date.now(), data };
+    return NextResponse.json(data);
+  } catch (error: any) {
+    // 실패 시 마지막 성공 결과라도 반환 (stale) — 화면이 무한로딩에 빠지지 않도록
+    if (cache) return NextResponse.json({ ...cache.data, _cached_at: new Date(cache.at).toISOString(), _stale_error: error.message });
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+async function buildDashboard(): Promise<Record<string, any>> {
+  {
     // (seedInitialData 는 /api/init 로만 — 매 요청 COUNT 쿼리 제거)
 
     // Active alerts — 계산만 (DB 기록은 /api/alerts 에서만, 30초 폴링이 쓰기를 유발하지 않도록)
@@ -85,8 +109,22 @@ export async function GET() {
       [curYm]
     ) as { contract_month: string; cnt: number }[];
 
+    // 활성 월물 시세를 쿼리 1개로 가져와 메모리에서 박스권 계산 (월물별 개별 쿼리 → 동시 커넥션 8개 사용하던 것을 1개로)
+    const monthList = activeMonths.map(m => m.contract_month);
+    const priceRows = monthList.length
+      ? await dbAll(
+          `SELECT contract_month, date::text AS date, settlement_usd FROM fcpo_settlement
+           WHERE settlement_usd IS NOT NULL AND contract_month IN (${monthList.map(() => '?').join(', ')})
+           ORDER BY contract_month, date ASC`,
+          monthList,
+        ) as { contract_month: string; date: string; settlement_usd: number }[]
+      : [];
+    const pricesByMonth = new Map<string, { date: string; settlement_usd: number }[]>();
+    for (const r of priceRows) {
+      const l = pricesByMonth.get(r.contract_month) ?? []; l.push({ date: r.date, settlement_usd: Number(r.settlement_usd) }); pricesByMonth.set(r.contract_month, l);
+    }
     const boxRangeResults = await Promise.all(
-      activeMonths.map(({ contract_month }) => calculateBoxRange(contract_month).catch(() => null))
+      activeMonths.map(({ contract_month }) => calculateBoxRange(contract_month, undefined, undefined, '일반', pricesByMonth.get(contract_month) ?? []).catch(() => null))
     );
     const boxRanges = activeMonths
       .map(({ contract_month }, i) => {
@@ -215,7 +253,7 @@ export async function GET() {
     let oilSpread = null;
     try { oilSpread = await getOilSpread(90); } catch (e: any) { console.warn('Oil spread skipped:', e.message); }
 
-    return NextResponse.json({
+    return {
       alerts,
       fcpo_latest: fcpoLatest,
       fcpo_latest_date: latestDate?.date,
@@ -229,8 +267,7 @@ export async function GET() {
       prebuy_effect: prebuyEffect,
       oil_spread: oilSpread,
       key_issues: keyIssues,
-    });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+      generated_at: new Date().toISOString(),
+    };
   }
 }
