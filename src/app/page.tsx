@@ -983,6 +983,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
       </div>
 
+      {/* 월물 곡선 한 줄 요약 */}
+      <TermStructurePanel compact />
+
       {/* AI Analysis — hidden by default, unlocked via easter egg */}
           {showAI && <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
@@ -1446,6 +1449,126 @@ const MpobSignalCards = ({ rows, sd, onNavigate }: { rows: MpobSummaryRow[]; sd?
           <p className="text-xs text-slate-700 leading-relaxed">{generateSignal()}</p>
         </div>
       </div>
+    </div>
+  );
+};
+
+// ============ 월물 곡선 (Term Structure) 패널 ============
+// compact: 대시보드용 한 줄 카드 / full: FCPO 탭 상세 (곡선 비교·스프레드 추이·표)
+const TermStructurePanel = ({ compact = false }: { compact?: boolean }) => {
+  const [ts, setTs] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch('/api/term-structure'); const j = await r.json(); if (!j.error) setTs(j); }
+      catch (e) { console.error('term-structure fetch failed', e); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+  if (loading) return <Shimmer className={compact ? 'h-20' : 'h-60'} />;
+  if (!ts || !ts.curve?.length) return compact ? null : <div className="card p-6 text-sm text-slate-500 text-center">월물 곡선을 만들 시세가 없습니다.</div>;
+
+  const structLabel: Record<string, string> = { backwardation: '백워데이션 (근월 > 원월)', contango: '콘탱고 (근월 < 원월)', flat: '플랫', mixed: '혼합' };
+  const structCls: Record<string, string> = { backwardation: 'bg-rose-50 text-rose-700', contango: 'bg-emerald-50 text-emerald-700', flat: 'bg-slate-100 text-slate-600', mixed: 'bg-amber-50 text-amber-700' };
+  const m1 = ts.curve[0]; const far = ts.curve[ts.curve.length - 1];
+  const badge = <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${structCls[ts.structure] ?? 'bg-slate-100 text-slate-600'}`}>{structLabel[ts.structure] ?? '-'}</span>;
+
+  if (compact) {
+    return (
+      <div className="card p-3 bg-indigo-50/40 border-indigo-100">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
+          <span className="font-semibold text-slate-800">📐 월물 곡선 ({ts.as_of})</span>
+          {badge}
+          <span>근월 {m1.contract_month} <b className="tabular-nums">${formatNumber(m1.price, 1)}</b></span>
+          <span>원월 {far.contract_month} <b className="tabular-nums">${formatNumber(far.price, 1)}</b> <span className={`font-semibold ${ts.spread_m1_far > 0 ? 'text-emerald-600' : ts.spread_m1_far < 0 ? 'text-rose-600' : 'text-slate-500'}`}>({ts.spread_m1_far > 0 ? '+' : ''}{ts.spread_m1_far})</span></span>
+          {ts.cheapest && <span>최저 월물 <b>{ts.cheapest.contract_month}</b> ${formatNumber(ts.cheapest.price, 1)}</span>}
+          {ts.spread_m1_m3_percentile != null && <span className="text-slate-500">M1−M3 스프레드 백분위 {ts.spread_m1_m3_percentile}%</span>}
+        </div>
+        <p className="text-[11px] text-slate-500 mt-1">{ts.advice}</p>
+      </div>
+    );
+  }
+
+  // 곡선 비교 데이터 (오늘 / 1주 전 / 1개월 전) — 월물 축 통합
+  const months: string[] = [...new Set<string>([...ts.curve, ...(ts.compare.week_ago?.curve ?? []), ...(ts.compare.month_ago?.curve ?? [])].map((c: any) => c.contract_month))].sort();
+  const at = (curve: any[] | undefined, m: string) => curve?.find((c: any) => c.contract_month === m)?.price ?? null;
+  const curveChart = months.map(m => ({ month: m, today: at(ts.curve, m), week: at(ts.compare.week_ago?.curve, m), mon: at(ts.compare.month_ago?.curve, m) }));
+  const histChart = (ts.history as any[]).map(h => ({ date: h.date.slice(5), m1: h.m1, far: h.far, s13: h.spread_m1_m3, sfar: h.spread_m1_far }));
+
+  return (
+    <div className="card p-5 space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">📐 월물 곡선 (Term Structure)</h3>
+          {badge}
+          <span className="text-[11px] text-slate-400">기준일 {ts.as_of}</span>
+        </div>
+        <div className="text-xs text-slate-600 flex gap-4">
+          <span>M1−M3 <b className={`tabular-nums ${ts.spread_m1_m3 < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{ts.spread_m1_m3 > 0 ? '+' : ''}{ts.spread_m1_m3 ?? '-'}</b> <span className="text-slate-400">(백분위 {ts.spread_m1_m3_percentile ?? '-'}%)</span></span>
+          <span>M1−원월 <b className={`tabular-nums ${ts.spread_m1_far < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{ts.spread_m1_far > 0 ? '+' : ''}{ts.spread_m1_far}</b></span>
+        </div>
+      </div>
+      <div className="card p-3 bg-indigo-50/40 border-indigo-100"><p className="text-xs text-slate-700 leading-relaxed">💡 {ts.advice}</p></div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div>
+          <p className="text-xs font-semibold text-slate-600 mb-2">월물별 가격 곡선 — 오늘 vs 1주 전{ts.compare.week_ago ? `(${ts.compare.week_ago.as_of})` : ''} vs 1개월 전{ts.compare.month_ago ? `(${ts.compare.month_ago.as_of})` : ''}</p>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={curveChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="today" name="오늘" stroke="#4f46e5" strokeWidth={2.5} connectNulls />
+              <Line type="monotone" dataKey="week" name="1주 전" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls />
+              <Line type="monotone" dataKey="mon" name="1개월 전" stroke="#cbd5e1" strokeWidth={1.5} strokeDasharray="2 2" dot={false} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-slate-600 mb-2">스프레드 추이 (원월−근월, M3−M1 · USD/MT) — 0 아래 = 백워데이션</p>
+          <ResponsiveContainer width="100%" height={240}>
+            <ComposedChart data={histChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+              <Tooltip />
+              <Legend />
+              <ReferenceLine y={0} stroke="#64748b" />
+              <Area type="monotone" dataKey="sfar" name="원월−근월" stroke="#4f46e5" fill="#c7d2fe" fillOpacity={0.5} connectNulls />
+              <Line type="monotone" dataKey="s13" name="M3−M1" stroke="#dc2626" strokeWidth={1.5} dot={false} connectNulls />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead><tr className="bg-slate-50 border-b border-slate-200 text-slate-500">
+            <th className="px-3 py-2 text-left">월물</th><th className="px-3 py-2 text-right">개월 후</th><th className="px-3 py-2 text-right">가격 (USD/MT)</th><th className="px-3 py-2 text-right">근월 대비</th><th className="px-3 py-2 text-right">%</th><th className="px-3 py-2 text-right">월당 캐리</th><th className="px-3 py-2 text-right">1주 전</th><th className="px-3 py-2 text-right">1개월 전</th>
+          </tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {(ts.curve as any[]).map(c => {
+              const w = at(ts.compare.week_ago?.curve, c.contract_month); const mo = at(ts.compare.month_ago?.curve, c.contract_month);
+              const isCheap = ts.cheapest?.contract_month === c.contract_month;
+              return (
+                <tr key={c.contract_month} className={`tabular-nums hover:bg-slate-50/60 ${isCheap ? 'bg-emerald-50/50' : ''}`}>
+                  <td className="px-3 py-1.5 font-medium text-slate-700">{c.contract_month}{c.months_ahead === 0 && <span className="ml-1 text-[9px] text-indigo-500">근월</span>}{isCheap && <span className="ml-1 text-[9px] text-emerald-600">최저</span>}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{c.months_ahead}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold">${formatNumber(c.price, 1)}</td>
+                  <td className={`px-3 py-1.5 text-right ${c.spread_vs_front < 0 ? 'text-rose-600' : c.spread_vs_front > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>{c.spread_vs_front > 0 ? '+' : ''}{c.spread_vs_front}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{c.pct_vs_front > 0 ? '+' : ''}{c.pct_vs_front}%</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{c.carry_per_month != null ? c.carry_per_month : '-'}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{w != null ? `$${formatNumber(w, 1)}` : '-'}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500">{mo != null ? `$${formatNumber(mo, 1)}` : '-'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] text-slate-400">* BMD RBD PALM OIL 호가는 M1~M3 + 분기(Q1~Q3) 구조라 4개월 이후는 분기 단위로 같은 값이 반복됩니다. 월당 캐리 = (해당 월물 − 근월) ÷ 개월 수.</p>
     </div>
   );
 };
@@ -2030,6 +2153,9 @@ const FCPOTab = () => {
           ))}
         </div>
       </div>
+
+      {/* 월물 곡선 (Term Structure) */}
+      <TermStructurePanel />
 
       {/* Chart */}
       <div className="card p-6">
