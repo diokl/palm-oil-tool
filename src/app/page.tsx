@@ -211,6 +211,13 @@ interface BoxRangeDetail {
     strategy: string;
   };
   confidence: string;
+  indicators?: {
+    rsi14: number; rsi_label: string;
+    macd: number; macd_signal: number; macd_hist: number; macd_label: string;
+    bb_upper: number; bb_lower: number; bb_pct_b: number; bb_label: string;
+    atr14: number; atr14_pct: number;
+    summary: string;
+  };
 }
 
 interface PurchaseItem {
@@ -3625,6 +3632,39 @@ const BoxRangeTab = () => {
               </div>
             </div>
           )}
+
+          {/* 보조 기술적 지표 (RSI · MACD · 볼린저 · ATR) */}
+          {boxRangeData.indicators && (() => { const t = boxRangeData.indicators; const c = (ok: boolean, bad: boolean) => ok ? 'text-emerald-600' : bad ? 'text-rose-600' : 'text-slate-700'; return (
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">보조 기술적 지표 (종가 기준)</h4>
+                <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${t.summary.includes('우호') ? 'bg-emerald-50 text-emerald-700' : t.summary.includes('과열') ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>{t.summary}</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div className="rounded-lg border border-slate-100 p-3">
+                  <p className="text-[11px] text-slate-500">RSI(14)</p>
+                  <p className={`text-lg font-bold tabular-nums ${c(t.rsi14 <= 30, t.rsi14 >= 70)}`}>{t.rsi14}</p>
+                  <p className="text-[11px] text-slate-500">{t.rsi_label}</p>
+                </div>
+                <div className="rounded-lg border border-slate-100 p-3">
+                  <p className="text-[11px] text-slate-500">MACD(12,26,9) 히스토그램</p>
+                  <p className={`text-lg font-bold tabular-nums ${t.macd_hist > 0 ? 'text-rose-600' : 'text-blue-600'}`}>{t.macd_hist > 0 ? '+' : ''}{t.macd_hist}</p>
+                  <p className="text-[11px] text-slate-500">{t.macd_label} (MACD {t.macd} / Signal {t.macd_signal})</p>
+                </div>
+                <div className="rounded-lg border border-slate-100 p-3">
+                  <p className="text-[11px] text-slate-500">볼린저 %B (20, 2σ)</p>
+                  <p className={`text-lg font-bold tabular-nums ${c(t.bb_pct_b <= 0.2, t.bb_pct_b >= 0.8)}`}>{t.bb_pct_b}</p>
+                  <p className="text-[11px] text-slate-500">{t.bb_label} · 밴드 {formatNumber(t.bb_lower, 0)}~{formatNumber(t.bb_upper, 0)}</p>
+                </div>
+                <div className="rounded-lg border border-slate-100 p-3">
+                  <p className="text-[11px] text-slate-500">ATR(14, 종가 기준)</p>
+                  <p className="text-lg font-bold tabular-nums text-slate-700">${t.atr14}</p>
+                  <p className="text-[11px] text-slate-500">일평균 변동 {t.atr14_pct}% — 분할 매수 간격 참고</p>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-2">* 팜유는 수급·정책 영향이 커서 기술 지표는 보조 확인용입니다. 박스권 구간과 수급 밸런스가 우선.</p>
+            </div>
+          ); })()}
 
           {/* Period Stats */}
           {boxRangeData.periods && boxRangeData.periods.length > 0 && (

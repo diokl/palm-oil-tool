@@ -96,6 +96,14 @@ export interface BoxRangeResult {
     strategy: string;
   };
   confidence: string;
+  // 보조 기술적 지표 (종가 기반, 30일 이상 데이터일 때)
+  indicators?: {
+    rsi14: number; rsi_label: string;
+    macd: number; macd_signal: number; macd_hist: number; macd_label: string;
+    bb_upper: number; bb_lower: number; bb_pct_b: number; bb_label: string;
+    atr14: number; atr14_pct: number;
+    summary: string;
+  };
 }
 
 // ===== Purchases =====

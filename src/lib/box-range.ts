@@ -1,6 +1,49 @@
 import { dbAll } from './db';
 import type { BoxRangeResult, BoxRangeMode } from './types';
 
+// ── 보조 기술적 지표 (종가 기반) ──
+// RSI(14), MACD(12,26,9), 볼린저 %B(20, 2σ), 종가 기준 ATR(14) 비율.
+// 팜유는 수급·정책 영향이 커서 보조 확인용으로만 사용 (박스권·수급 판단이 우선).
+function ema(values: number[], n: number): number[] {
+  const k = 2 / (n + 1);
+  const out: number[] = [];
+  let prev: number | null = null;
+  for (const v of values) { prev = prev == null ? v : v * k + prev * (1 - k); out.push(prev); }
+  return out;
+}
+export function computeIndicators(values: number[]): BoxRangeResult['indicators'] | undefined {
+  if (values.length < 30) return undefined;
+  // RSI 14 (Wilder)
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= 14; i++) { const d = values[i] - values[i - 1]; if (d > 0) gain += d; else loss -= d; }
+  let ag = gain / 14, al = loss / 14;
+  for (let i = 15; i < values.length; i++) { const d = values[i] - values[i - 1]; ag = (ag * 13 + Math.max(d, 0)) / 14; al = (al * 13 + Math.max(-d, 0)) / 14; }
+  const rsi = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  // MACD
+  const e12 = ema(values, 12), e26 = ema(values, 26);
+  const macdLine = e12.map((v, i) => v - e26[i]);
+  const signalLine = ema(macdLine.slice(25), 9);
+  const macd = macdLine[macdLine.length - 1], signal = signalLine[signalLine.length - 1];
+  const hist = macd - signal;
+  const prevHist = macdLine[macdLine.length - 2] - signalLine[signalLine.length - 2];
+  // Bollinger 20, 2σ
+  const w = values.slice(-20); const m = w.reduce((s, v) => s + v, 0) / 20;
+  const sd = Math.sqrt(w.reduce((s, v) => s + (v - m) ** 2, 0) / 19);
+  const upper = m + 2 * sd, lower = m - 2 * sd;
+  const last = values[values.length - 1];
+  const pctB = upper === lower ? 0.5 : (last - lower) / (upper - lower);
+  // ATR proxy (종가 변화 절대값 14일 평균 / 현재가)
+  const diffs: number[] = []; for (let i = values.length - 14; i < values.length; i++) diffs.push(Math.abs(values[i] - values[i - 1]));
+  const atr = diffs.reduce((s, v) => s + v, 0) / diffs.length;
+  const r = (x: number, d = 1) => Math.round(x * 10 ** d) / 10 ** d;
+  const rsiLabel = rsi >= 70 ? '과매수' : rsi <= 30 ? '과매도' : rsi >= 60 ? '강세권' : rsi <= 40 ? '약세권' : '중립';
+  const macdLabel = hist > 0 ? (prevHist <= 0 ? '골든크로스 직후 (상승 전환)' : '상승 모멘텀') : (prevHist >= 0 ? '데드크로스 직후 (하락 전환)' : '하락 모멘텀');
+  const bbLabel = pctB >= 1 ? '상단 돌파 (과열)' : pctB <= 0 ? '하단 이탈 (과매도)' : pctB >= 0.8 ? '상단권' : pctB <= 0.2 ? '하단권' : '밴드 중간';
+  const buyBias = (rsi <= 40 ? 1 : rsi >= 60 ? -1 : 0) + (hist > 0 ? -0.5 : 0.5) + (pctB <= 0.2 ? 1 : pctB >= 0.8 ? -1 : 0);
+  const summary = buyBias >= 1.5 ? '기술적으로 매수 우호 (과매도·하단권)' : buyBias <= -1.5 ? '기술적으로 과열 — 추격 매수 자제' : '기술적 신호 혼재 — 박스권·수급 판단 우선';
+  return { rsi14: r(rsi), rsi_label: rsiLabel, macd: r(macd, 2), macd_signal: r(signal, 2), macd_hist: r(hist, 2), macd_label: macdLabel, bb_upper: r(upper), bb_lower: r(lower), bb_pct_b: r(pctB, 2), bb_label: bbLabel, atr14: r(atr), atr14_pct: r((atr / last) * 100, 2), summary };
+}
+
 export async function calculateBoxRange(
   contractMonth: string,
   currentPrice?: number,
@@ -158,5 +201,6 @@ export async function calculateBoxRange(
     trends: { short_term, mid_term, long_term, golden_cross_10_20, golden_cross_20_60, dead_cross_10_20, dead_cross_20_60 },
     volatility: { pct_20d: vol, classification, market_status, strategy },
     confidence,
+    indicators: computeIndicators(allValues),
   };
 }
