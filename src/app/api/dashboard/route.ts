@@ -71,14 +71,18 @@ export async function GET() {
       return { ...pick, upcoming };
     }).filter(Boolean);
 
-    // Box range for all contract months with sufficient data (>=10 price points)
+    // Box range — 현재월 이후(활성) 월물만, 최대 8개.
+    // (이전: 2020년부터 데이터 10개 이상인 모든 월물 70여 개를 동시에 계산 → 커넥션 풀 고갈·504 원인)
+    const curYm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
     const activeMonths = await dbAll(
       `SELECT contract_month, COUNT(*) as cnt
        FROM fcpo_settlement
-       WHERE settlement_usd IS NOT NULL
+       WHERE settlement_usd IS NOT NULL AND contract_month >= ?
        GROUP BY contract_month
        HAVING COUNT(*) >= 10
-       ORDER BY contract_month`
+       ORDER BY contract_month
+       LIMIT 8`,
+      [curYm]
     ) as { contract_month: string; cnt: number }[];
 
     const boxRangeResults = await Promise.all(
