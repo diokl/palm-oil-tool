@@ -1014,10 +1014,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
       </div>
 
-      {/* 월물 곡선 한 줄 요약 */}
-      <TermStructurePanel compact />
+      {/* 월물 곡선은 대시보드에서 숨김 (FCPO 탭에서만 표시) — 사용자 요청 */}
 
-      {/* 매크로 한 줄 (환율·Brent·POGO) */}
+      {/* 환율·에너지 한 줄 (USD/KRW·USD/MYR·Brent·POGO) */}
       <MacroPanel compact />
 
       {/* AI Analysis — hidden by default, unlocked via easter egg */}
@@ -1718,12 +1717,12 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
     return (
       <div className="card p-3 bg-slate-50/60">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
-          <span className="font-semibold text-slate-800">💱 매크로</span>
+          <span className="font-semibold text-slate-800">💱 환율·에너지</span>
           <span>USD/KRW <b className="tabular-nums">{fmtV(L('USDKRW'))}</b>{chg(L('USDKRW'))}</span>
           <span>USD/MYR <b className="tabular-nums">{fmtV(L('USDMYR'))}</b>{chg(L('USDMYR'))}</span>
           <span>Brent <b className="tabular-nums">${fmtV(L('BRENT'))}</b>{chg(L('BRENT'))}</span>
-          {pogo?.vs_brent != null && <span title="팜유(USD/MT) − Brent(USD/MT 환산). 양수 = 팜유가 원유보다 비쌈 → 바이오디젤 수요 약화">POGO(팜유−원유) <b className={`tabular-nums ${pogoCls(pogo.vs_brent)}`}>{pogo.vs_brent > 0 ? '+' : ''}${formatNumber(pogo.vs_brent, 0)}</b></span>}
-          {pogo?.vs_ho != null && <span className="text-slate-500" title="팜유 − Heating Oil(경유 대용, USD/MT 환산)">vs 경유 {pogo.vs_ho > 0 ? '+' : ''}${formatNumber(pogo.vs_ho, 0)}</span>}
+          {pogo?.vs_ho != null && <span title="POGO(Palm Oil − Gas Oil) 스프레드 = 팜유(USD/MT) − 경유(USD/MT 환산). 음수 = 팜유가 경유보다 싸서 바이오디젤 원료로 유리 → 에너지 수요가 팜유 가격을 지지. 양수 = 바이오디젤 전환 유인 약화">팜유−경유(POGO) <b className={`tabular-nums ${pogoCls(pogo.vs_ho)}`}>{pogo.vs_ho > 0 ? '+' : ''}${formatNumber(pogo.vs_ho, 0)}</b></span>}
+          {pogo?.vs_brent != null && <span className="text-slate-500" title="참고: 팜유 − Brent 원유(USD/MT 환산). 경유가 아닌 원유 기준이라 참고치">팜유−원유 {pogo.vs_brent > 0 ? '+' : ''}${formatNumber(pogo.vs_brent, 0)}</span>}
           {snap?.dce?.palm_usd != null && <span title="대련 팜올레인 주력월물(CNY/t → USD/MT 환산, 증치세 포함 국내가) − FCPO. 스프레드 축소 = 중국 수입 채산성 악화 → 수입 수요 둔화">🇨🇳 대련 팜유 <b className="tabular-nums">${formatNumber(snap.dce.palm_usd, 0)}</b> <span className={`font-semibold ${snap.dce.palm_vs_fcpo > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>(FCPO 대비 {snap.dce.palm_vs_fcpo > 0 ? '+' : ''}{formatNumber(snap.dce.palm_vs_fcpo, 0)})</span></span>}
           <span className="text-[10px] text-slate-400 ml-auto">{L('BRENT')?.date ?? ''} · 매일 07:30 자동</span>
         </div>
@@ -1736,7 +1735,7 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
     <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-slate-700">💱 매크로 · 에너지 · 환율 (자동 수집)</h3>
+          <h3 className="text-sm font-semibold text-slate-700">💱 환율 · 원유 · 경유 · 대두유 (자동 수집)</h3>
           <p className="text-[11px] text-slate-500 mt-0.5">환율 ECB(frankfurter) · 원유/경유/대두유 Yahoo Finance · 매일 07:30(KST) 자동. 대두유는 위 표에 yahoo_auto 로 들어가며 KoreaPDS 수동값이 우선합니다.</p>
         </div>
         {canWrite && (
@@ -1763,14 +1762,14 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="rounded-xl border border-slate-100 p-3 bg-slate-50/50">
-              <p className="text-[11px] text-slate-500">POGO 스프레드 — 팜유 − Brent (USD/MT 환산, ×7.33)</p>
-              <p className={`text-2xl font-bold tabular-nums ${pogoCls(pogo?.vs_brent ?? null)}`}>{pogo?.vs_brent != null ? `${pogo.vs_brent > 0 ? '+' : ''}$${formatNumber(pogo.vs_brent, 0)}` : '-'}</p>
-              <p className="text-[11px] text-slate-500">팜유 ${formatNumber(snap.palm?.usd_mt, 0)} ({snap.palm?.date}) vs Brent ${formatNumber(pogo?.brent_usd_mt, 0)}/MT. 양수↑ = 팜유가 원유보다 비쌈 → 바이오디젤 전환 유인 약화(팜유 약세 요인), 음수 = 에너지 수요가 팜유 가격을 지지</p>
+              <p className="text-[11px] text-slate-500">POGO 스프레드 = 팜유 − 경유 (USD/MT, Heating Oil ×315 환산)</p>
+              <p className={`text-2xl font-bold tabular-nums ${pogoCls(pogo?.vs_ho ?? null)}`}>{pogo?.vs_ho != null ? `${pogo.vs_ho > 0 ? '+' : ''}$${formatNumber(pogo.vs_ho, 0)}` : '-'}</p>
+              <p className="text-[11px] text-slate-500">팜유 ${formatNumber(snap.palm?.usd_mt, 0)} ({snap.palm?.date}) vs 경유 ${formatNumber(pogo?.ho_usd_mt, 0)}/MT. 음수 = 팜유가 경유보다 싸서 바이오디젤 원료로 유리 → 에너지 수요가 팜유 가격을 지지. 양수 = 전환 유인 약화(팜유 약세 요인). 실제 POGO 는 ICE 가스오일 기준이나 무료 소스가 없어 NYMEX Heating Oil 로 대용</p>
             </div>
             <div className="rounded-xl border border-slate-100 p-3 bg-slate-50/50">
-              <p className="text-[11px] text-slate-500">팜유 − Heating Oil (경유 대용, USD/MT 환산 ×315)</p>
-              <p className={`text-2xl font-bold tabular-nums ${pogoCls(pogo?.vs_ho ?? null)}`}>{pogo?.vs_ho != null ? `${pogo.vs_ho > 0 ? '+' : ''}$${formatNumber(pogo.vs_ho, 0)}` : '-'}</p>
-              <p className="text-[11px] text-slate-500">경유 ${formatNumber(pogo?.ho_usd_mt, 0)}/MT. 실제 POGO 는 가스오일(ICE) 기준이나 무료 소스가 없어 NYMEX Heating Oil 로 대용</p>
+              <p className="text-[11px] text-slate-500">참고: 팜유 − Brent 원유 (USD/MT, ×7.33 환산)</p>
+              <p className={`text-2xl font-bold tabular-nums ${pogoCls(pogo?.vs_brent ?? null)}`}>{pogo?.vs_brent != null ? `${pogo.vs_brent > 0 ? '+' : ''}$${formatNumber(pogo.vs_brent, 0)}` : '-'}</p>
+              <p className="text-[11px] text-slate-500">Brent ${formatNumber(pogo?.brent_usd_mt, 0)}/MT. 원유는 정제 전 가격이라 경유보다 항상 낮게 나오며, 추세 참고용입니다</p>
             </div>
           </div>
           {/* 중국 대련(DCE) */}
@@ -1796,7 +1795,7 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
 
           {chart.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-slate-600 mb-2">팜유 · Brent · 경유 (USD/MT) 와 POGO 스프레드 — 최근 180일</p>
+              <p className="text-xs font-semibold text-slate-600 mb-2">팜유 · Brent · 경유 (USD/MT) 와 팜유−원유 스프레드 — 최근 180일</p>
               <ResponsiveContainer width="100%" height={260}>
                 <ComposedChart data={chart}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -1805,7 +1804,7 @@ const MacroPanel = ({ compact = false }: { compact?: boolean }) => {
                   <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
                   <Tooltip />
                   <Legend />
-                  <Area yAxisId="r" type="monotone" dataKey="pogo" name="POGO(팜유−Brent)" stroke="#f59e0b" fill="#fde68a" fillOpacity={0.35} connectNulls />
+                  <Area yAxisId="r" type="monotone" dataKey="pogo" name="팜유−Brent" stroke="#f59e0b" fill="#fde68a" fillOpacity={0.35} connectNulls />
                   <Line yAxisId="l" type="monotone" dataKey="palm" name="팜유" stroke="#dc2626" strokeWidth={2} dot={false} connectNulls />
                   <Line yAxisId="l" type="monotone" dataKey="brent" name="Brent(/MT)" stroke="#1e293b" strokeWidth={1.5} dot={false} connectNulls />
                   <Line yAxisId="l" type="monotone" dataKey="ho" name="경유(/MT)" stroke="#64748b" strokeWidth={1} strokeDasharray="4 4" dot={false} connectNulls />
@@ -5151,7 +5150,7 @@ const SoybeanTab = () => {
         )}
       </div>
 
-      {/* 매크로·에너지·환율 자동 수집 */}
+      {/* 환율·원유·경유·대두유 자동 수집 */}
       <MacroPanel />
 
       {msg && (
