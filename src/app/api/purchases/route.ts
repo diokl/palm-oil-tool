@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun, dbGet, dbBatchRun } from '@/lib/db';
 import { calculatePrebuyEffect, getPremium, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
 import { syncCustomsVolumeForShipments, syncCustomsVolumeFromPurchases } from '@/lib/inventory-calc';
+import { premiumOverride, specOf, productForSpec, defaultPremiums, premiumSum } from '@/lib/spec';
 import type { Product } from '@/lib/types';
 
 export async function GET(request: NextRequest) {
@@ -69,6 +70,12 @@ interface PurchaseDetail {
   exchange_rate: number;
   effect_usd: number;
   effect_krw: number;
+  // 스펙·프리미엄 분해 (lib/spec.ts)
+  spec: string;
+  base_price: number | null;      // RBD 환산가 = 단가 − 프리미엄 합
+  prem_3mcpd: number | null;
+  prem_ge: number | null;
+  prem_rspo: number | null;
 }
 
 interface MonthRow {
@@ -80,6 +87,7 @@ interface MonthRow {
   rspo_qty: number; rspo_amount: number; rspo_effect_usd: number; rspo_effect_krw: number;
   // MANAGED totals
   managed_qty: number; managed_amount: number; managed_effect_usd: number; managed_effect_krw: number;
+  managed_rspo_qty: number; managed_rspo_amount: number; managed_rspo_effect_usd: number; managed_rspo_effect_krw: number;
   // Combined
   total_qty: number; total_amount: number;
   wavg_price: number; avg_market_price: number;
@@ -105,8 +113,10 @@ async function handlePrebuySummary() {
   const rbdMonths: any[] = [];
   const rspoMonths: any[] = [];
   const managedMonths: any[] = [];
-  let rbdCum = 0, rspoCum = 0, managedCum = 0;
-  let rbdTotal = 0, rspoTotal = 0, managedTotal = 0;
+  const managedRspoMonths: any[] = [];
+  let rbdCum = 0, rspoCum = 0, managedCum = 0, managedRspoCum = 0;
+  let rbdTotal = 0, rspoTotal = 0, managedTotal = 0, managedRspoTotal = 0;
+  const allDetails: PurchaseDetail[] = [];
 
   for (const [month, monthPurchases] of grouped.entries()) {
     // Build per-purchase details (each purchase has its own exchange_rate).
@@ -115,7 +125,9 @@ async function handlePrebuySummary() {
       const mp = p.market_price_usd != null ? Number(p.market_price_usd) : null;
       const er = p.exchange_rate != null ? Number(p.exchange_rate) : DEFAULT_EXCHANGE_RATE;
       const product = (p.product as Product);
-      const premium = getPremium(product);
+      // 계약별 분해 프리미엄이 있으면 그 합, 없으면 제품 기본값
+      const premium = premiumOverride(p) ?? getPremium(product);
+      const spec = specOf(p);
 
       let effectUsd = 0;
       let effectKrw = 0;
@@ -127,6 +139,7 @@ async function handlePrebuySummary() {
           market_price_rbd: mp,
           qty_mt: p.qty_mt || 0,
           exchange_rate: er,
+          premium_override: premium,
         });
         // savings 부호 (양수=절감) — 기존 UI 호환
         effectUsd = r.savings_usd;
@@ -141,6 +154,11 @@ async function handlePrebuySummary() {
         unit_price: p.unit_price, qty_mt: p.qty_mt, amount_usd: p.amount_usd,
         market_price_usd: mp,
         premium_usd: premium,
+        spec,
+        base_price: p.base_price != null ? Number(p.base_price) : (p.unit_price != null ? Number(p.unit_price) - premium : null),
+        prem_3mcpd: p.prem_3mcpd != null ? Number(p.prem_3mcpd) : null,
+        prem_ge: p.prem_ge != null ? Number(p.prem_ge) : null,
+        prem_rspo: p.prem_rspo != null ? Number(p.prem_rspo) : null,
         normalized_market_price: normalizedMarket,
         exchange_rate: er,
         effect_usd: effectUsd,
@@ -152,6 +170,8 @@ async function handlePrebuySummary() {
     const rbdP = details.filter(d => d.product === 'RBD');
     const rspoP = details.filter(d => d.product === 'RSPO');
     const managedP = details.filter(d => d.product === 'MANAGED');
+    const managedRspoP = details.filter(d => d.product === 'MANAGED_RSPO');
+    allDetails.push(...details);
 
     const sumGroup = (arr: PurchaseDetail[]) => ({
       qty: arr.reduce((s, d) => s + (d.qty_mt || 0), 0),
@@ -163,9 +183,10 @@ async function handlePrebuySummary() {
     const rbdS = sumGroup(rbdP);
     const rspoS = sumGroup(rspoP);
     const managedS = sumGroup(managedP);
-    const totalQty = rbdS.qty + rspoS.qty + managedS.qty;
-    const totalAmount = rbdS.amount + rspoS.amount + managedS.amount;
-    const totalEffectUsd = rbdS.effectUsd + rspoS.effectUsd + managedS.effectUsd;
+    const managedRspoS = sumGroup(managedRspoP);
+    const totalQty = rbdS.qty + rspoS.qty + managedS.qty + managedRspoS.qty;
+    const totalAmount = rbdS.amount + rspoS.amount + managedS.amount + managedRspoS.amount;
+    const totalEffectUsd = rbdS.effectUsd + rspoS.effectUsd + managedS.effectUsd + managedRspoS.effectUsd;
     const wavg = totalQty > 0 ? totalAmount / totalQty : 0;
 
     // Average market price across purchases that have one set
@@ -174,7 +195,7 @@ async function handlePrebuySummary() {
       ? withMp.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / withMp.reduce((s, d) => s + d.qty_mt, 0)
       : 0;
 
-    const totalEffectKrw = rbdS.effectKrw + rspoS.effectKrw + managedS.effectKrw;
+    const totalEffectKrw = rbdS.effectKrw + rspoS.effectKrw + managedS.effectKrw + managedRspoS.effectKrw;
     cumAll += totalEffectKrw;
 
     months.push({
@@ -186,6 +207,8 @@ async function handlePrebuySummary() {
       rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: rspoS.effectKrw,
       managed_qty: managedS.qty, managed_amount: managedS.amount,
       managed_effect_usd: managedS.effectUsd, managed_effect_krw: managedS.effectKrw,
+      managed_rspo_qty: managedRspoS.qty, managed_rspo_amount: managedRspoS.amount,
+      managed_rspo_effect_usd: managedRspoS.effectUsd, managed_rspo_effect_krw: managedRspoS.effectKrw,
       total_qty: totalQty, total_amount: totalAmount,
       wavg_price: wavg, avg_market_price: avgMp,
       effect_usd: totalEffectUsd, effect_krw: totalEffectKrw,
@@ -242,13 +265,65 @@ async function handlePrebuySummary() {
         purchases: managedP,
       });
     }
+    if (managedRspoS.qty > 0) {
+      const w = managedRspoS.amount / managedRspoS.qty;
+      const mpRows = managedRspoP.filter(d => d.market_price_usd != null);
+      const avgMp = mpRows.length > 0 ? mpRows.reduce((s, d) => s + d.market_price_usd! * d.qty_mt, 0) / mpRows.reduce((s, d) => s + d.qty_mt, 0) : 0;
+      managedRspoCum += managedRspoS.effectKrw;
+      managedRspoTotal += managedRspoS.effectKrw;
+      managedRspoMonths.push({
+        shipment_month: month, qty: managedRspoS.qty, amount: managedRspoS.amount,
+        wavg_price: w, market_price: avgMp, price_diff: w - avgMp,
+        effect_usd: managedRspoS.effectUsd, effect_krw: managedRspoS.effectKrw,
+        cumulative_effect_krw: managedRspoCum,
+        evaluation: managedRspoS.effectUsd > 0 ? '성공' : '실패',
+        purchases: managedRspoP,
+      });
+    }
   }
+
+  // ── 스펙별 요약 (RBD / RSPO / 3-MCPD / 3-MCPD+GE / 3-MCPD+RSPO / 3-MCPD+GE+RSPO) ──
+  const specMap = new Map<string, { spec: string; n: number; qty: number; amount: number; effect_usd: number; effect_krw: number; prem_wsum: number; base_wsum: number; mp_wsum: number; mp_qty: number }>();
+  for (const d of allDetails) {
+    const g = specMap.get(d.spec) ?? { spec: d.spec, n: 0, qty: 0, amount: 0, effect_usd: 0, effect_krw: 0, prem_wsum: 0, base_wsum: 0, mp_wsum: 0, mp_qty: 0 };
+    const q = d.qty_mt || 0;
+    g.n++; g.qty += q; g.amount += d.amount_usd || 0; g.effect_usd += d.effect_usd; g.effect_krw += d.effect_krw;
+    g.prem_wsum += d.premium_usd * q; g.base_wsum += (d.base_price ?? d.unit_price) * q;
+    if (d.market_price_usd != null) { g.mp_wsum += d.market_price_usd * q; g.mp_qty += q; }
+    specMap.set(d.spec, g);
+  }
+  const by_spec = [...specMap.values()].map(g => ({
+    spec: g.spec, n: g.n, qty: g.qty, amount: g.amount, effect_usd: g.effect_usd, effect_krw: g.effect_krw,
+    wavg_price: g.qty ? g.amount / g.qty : 0, avg_premium: g.qty ? g.prem_wsum / g.qty : 0,
+    wavg_base: g.qty ? g.base_wsum / g.qty : 0, avg_market: g.mp_qty ? g.mp_wsum / g.mp_qty : null,
+  }));
+
+  // ── 공급사 × 스펙 프리미엄 벤치마크 (분해값 저장된 계약만, 물량 가중) ──
+  const benchMap = new Map<string, { supplier: string; spec: string; n: number; qty: number; s3: number; sge: number; srspo: number; months: Set<string> }>();
+  for (const d of allDetails) {
+    if (d.prem_3mcpd == null && d.prem_ge == null && d.prem_rspo == null) continue;
+    if (d.spec === 'RBD') continue;
+    const supplier = (d.supplier || '-').trim().split(/\s+/)[0].toUpperCase();
+    const key = `${supplier}|${d.spec}`;
+    const g = benchMap.get(key) ?? { supplier, spec: d.spec, n: 0, qty: 0, s3: 0, sge: 0, srspo: 0, months: new Set<string>() };
+    const q = d.qty_mt || 0;
+    g.n++; g.qty += q; g.s3 += (d.prem_3mcpd ?? 0) * q; g.sge += (d.prem_ge ?? 0) * q; g.srspo += (d.prem_rspo ?? 0) * q; g.months.add(d.shipment_month);
+    benchMap.set(key, g);
+  }
+  const premium_benchmark = [...benchMap.values()].map(g => ({
+    supplier: g.supplier, spec: g.spec, n: g.n, qty: g.qty,
+    avg_3mcpd: g.qty ? g.s3 / g.qty : 0, avg_ge: g.qty ? g.sge / g.qty : 0, avg_rspo: g.qty ? g.srspo / g.qty : 0,
+    avg_total: g.qty ? (g.s3 + g.sge + g.srspo) / g.qty : 0, months: [...g.months].sort(),
+  })).sort((a, b) => a.spec.localeCompare(b.spec) || a.supplier.localeCompare(b.supplier));
 
   return NextResponse.json({
     data: months,
     rbd:     { rows: rbdMonths,     total_effect_krw: rbdTotal },
     rspo:    { rows: rspoMonths,    total_effect_krw: rspoTotal },
     managed: { rows: managedMonths, total_effect_krw: managedTotal },
+    managed_rspo: { rows: managedRspoMonths, total_effect_krw: managedRspoTotal },
+    by_spec,
+    premium_benchmark,
     summary: { total_effect_krw: cumAll },
   });
 }
@@ -257,10 +332,20 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
-      order_no, product, shipment_month, supplier, manufacturer,
+      order_no, shipment_month, supplier, manufacturer,
       product_name, unit_price, qty_mt, amount_usd, incoterms,
       payment_terms, etd, contract_number, notes, market_price_usd,
     } = body;
+    // 스펙 → product 자동 결정 (spec 없으면 product 로 추정). 프리미엄 분해값은 스펙 기본값으로 보완.
+    const spec = specOf({ spec: body.spec, product: body.product });
+    const product = body.spec ? productForSpec(spec) : (body.product || productForSpec(spec));
+    const defs = defaultPremiums(spec);
+    const prem = {
+      prem_3mcpd: body.prem_3mcpd != null && body.prem_3mcpd !== '' ? Number(body.prem_3mcpd) : defs.prem_3mcpd,
+      prem_ge: body.prem_ge != null && body.prem_ge !== '' ? Number(body.prem_ge) : defs.prem_ge,
+      prem_rspo: body.prem_rspo != null && body.prem_rspo !== '' ? Number(body.prem_rspo) : defs.prem_rspo,
+    };
+    const basePrice = body.base_price != null && body.base_price !== '' ? Number(body.base_price) : (unit_price ? Number(unit_price) - premiumSum(prem) : null);
 
     if (!product || !shipment_month || !unit_price || !qty_mt) {
       return NextResponse.json(
@@ -275,14 +360,16 @@ export async function POST(request: NextRequest) {
       `INSERT INTO purchases (
         order_no, product, shipment_month, supplier, manufacturer,
         product_name, unit_price, qty_mt, amount_usd, incoterms,
-        payment_terms, etd, contract_number, notes, market_price_usd, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        payment_terms, etd, contract_number, notes, market_price_usd,
+        spec, base_price, prem_3mcpd, prem_ge, prem_rspo, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         order_no || null, product, shipment_month, supplier || null,
         manufacturer || null, product_name || null, unit_price, qty_mt,
         finalAmountUsd, incoterms || null, payment_terms || null,
         etd || null, contract_number || null, notes || null,
         market_price_usd ?? null,
+        spec, basePrice, prem.prem_3mcpd, prem.prem_ge, prem.prem_rspo,
       ]
     );
 
@@ -364,6 +451,14 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
 
+    // spec 이 오면 product 를 스펙에 맞춰 강제, base_price 는 단가·프리미엄에서 재산출
+    if (fields.spec) {
+      fields.product = productForSpec(specOf({ spec: fields.spec }));
+      const cur = await dbGet('SELECT unit_price, prem_3mcpd, prem_ge, prem_rspo FROM purchases WHERE id = ?', [id]) as any;
+      const merged = { prem_3mcpd: fields.prem_3mcpd ?? cur?.prem_3mcpd, prem_ge: fields.prem_ge ?? cur?.prem_ge, prem_rspo: fields.prem_rspo ?? cur?.prem_rspo };
+      const price = fields.unit_price ?? cur?.unit_price;
+      if (price != null && (merged.prem_3mcpd != null || merged.prem_ge != null || merged.prem_rspo != null)) fields.base_price = Number(price) - premiumSum(merged);
+    }
     const updateKeys = Object.keys(fields);
     if (updateKeys.length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });

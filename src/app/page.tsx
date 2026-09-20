@@ -10,20 +10,22 @@ import {
   sumBaseFromLocations, buildDemandMap, isBusinessDay, ymd,
   RECO_DEFAULT, type RecoConfig,
 } from '@/lib/mgd-core';
+import { SPEC_OPTIONS, SPEC_LABEL, SPEC_SHORT, PRODUCT_LABEL, productForSpec, defaultPremiums, specOf } from '@/lib/spec';
 
 // ============ AUTH CONTEXT ============
 const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrite: false, role: 'user' });
 const useAuth = () => useContext(AuthContext);
 
 type Tab = 'dashboard' | 'fcpo' | 'soybean' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin';
-type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026' | 'managed2026';
+type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026' | 'managed2026' | 'managedrspo2026';
 
-const INVENTORY_SUB_TABS: { id: InventorySubTab; label: string; product: 'RBD' | 'RSPO' | 'MANAGED'; year: number }[] = [
+const INVENTORY_SUB_TABS: { id: InventorySubTab; label: string; product: 'RBD' | 'RSPO' | 'MANAGED' | 'MANAGED_RSPO'; year: number }[] = [
   { id: 'rbd2025',     label: 'RBD 2025',        product: 'RBD',     year: 2025 },
   { id: 'rbd2026',     label: 'RBD 2026',        product: 'RBD',     year: 2026 },
   { id: 'rspo2025',    label: 'RSPO 2025',       product: 'RSPO',    year: 2025 },
   { id: 'rspo2026',    label: 'RSPO 2026',       product: 'RSPO',    year: 2026 },
-  { id: 'managed2026', label: '관리팜유 2026',    product: 'MANAGED', year: 2026 },
+  { id: 'managed2026', label: '관리팜유 RPO 2026',  product: 'MANAGED', year: 2026 },
+  { id: 'managedrspo2026', label: '관리팜유 RSPO 2026', product: 'MANAGED_RSPO', year: 2026 },
 ];
 
 // ============ TYPES ============
@@ -237,6 +239,11 @@ interface PurchaseItem {
   etd: string | null;
   contract_number: string | null;
   notes: string | null;
+  spec?: string | null;
+  base_price?: number | null;
+  prem_3mcpd?: number | null;
+  prem_ge?: number | null;
+  prem_rspo?: number | null;
 }
 
 interface PurchasesRawResponse {
@@ -724,11 +731,16 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
   const managedAmount = filtered.reduce((s, m) => s + (m.managed_amount ?? 0), 0);
   const managedEffectUsd = filtered.reduce((s, m) => s + (m.managed_effect_usd ?? 0), 0);
   const managedEffectKrw = filtered.reduce((s, m) => s + (m.managed_effect_krw ?? 0), 0);
+  // 관리팜유 RSPO (3-MCPD ±GE + RSPO)
+  const mrQty = filtered.reduce((s, m) => s + ((m as any).managed_rspo_qty ?? 0), 0);
+  const mrAmount = filtered.reduce((s, m) => s + ((m as any).managed_rspo_amount ?? 0), 0);
+  const mrEffectUsd = filtered.reduce((s, m) => s + ((m as any).managed_rspo_effect_usd ?? 0), 0);
+  const mrEffectKrw = filtered.reduce((s, m) => s + ((m as any).managed_rspo_effect_krw ?? 0), 0);
 
-  const totalQty = rbdQty + rspoQty + managedQty;
-  const totalAmount = rbdAmount + rspoAmount + managedAmount;
-  const totalEffectUsd = rbdEffectUsd + rspoEffectUsd + managedEffectUsd;
-  const totalEffectKrw = rbdEffectKrw + rspoEffectKrw + managedEffectKrw;
+  const totalQty = rbdQty + rspoQty + managedQty + mrQty;
+  const totalAmount = rbdAmount + rspoAmount + managedAmount + mrAmount;
+  const totalEffectUsd = rbdEffectUsd + rspoEffectUsd + managedEffectUsd + mrEffectUsd;
+  const totalEffectKrw = rbdEffectKrw + rspoEffectKrw + managedEffectKrw + mrEffectKrw;
 
   const fmtNum = (n: number) => n === 0 ? '-' : n.toLocaleString('ko-KR', { maximumFractionDigits: 0 });
   const fmtUsd = (n: number) => n === 0 ? '-' : `$${n.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}`;
@@ -786,14 +798,24 @@ const DashboardPrebuyTable = ({ months, allMonths, defaultFrom, defaultTo, total
               <td className={`px-3 py-2 text-center ${evalColor(rspoEffectUsd)}`}>{evalLabel(rspoEffectUsd)}</td>
             </tr>
             <tr className="border-b border-slate-50 hover:bg-slate-50/50">
-              <td className="px-3 py-2 font-medium text-slate-700" title="Low 3-MCPD + Low GE + RSPO">
-                관리팜유 <span className="text-[10px] text-slate-400">(Low 3-MCPD+GE+RSPO)</span>
+              <td className="px-3 py-2 font-medium text-slate-700" title="Low 3-MCPD (±GE), RSPO 미포함">
+                관리팜유 RPO <span className="text-[10px] text-slate-400">(3-MCPD ±GE)</span>
               </td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtNum(managedQty)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(managedAmount)}</td>
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(managedEffectUsd)}`}>{fmtUsd(managedEffectUsd)}</td>
               <td className={`px-3 py-2 text-right tabular-nums ${evalColor(managedEffectUsd)}`}>{fmtKrw2(managedEffectKrw)}</td>
               <td className={`px-3 py-2 text-center ${evalColor(managedEffectUsd)}`}>{evalLabel(managedEffectUsd)}</td>
+            </tr>
+            <tr className="border-b border-slate-50 hover:bg-slate-50/50">
+              <td className="px-3 py-2 font-medium text-slate-700" title="Low 3-MCPD (±GE) + RSPO MB">
+                관리팜유 RSPO <span className="text-[10px] text-slate-400">(3-MCPD ±GE + RSPO)</span>
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtNum(mrQty)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(mrAmount)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(mrEffectUsd)}`}>{fmtUsd(mrEffectUsd)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${evalColor(mrEffectUsd)}`}>{fmtKrw2(mrEffectKrw)}</td>
+              <td className={`px-3 py-2 text-center ${evalColor(mrEffectUsd)}`}>{evalLabel(mrEffectUsd)}</td>
             </tr>
             <tr className="bg-slate-50/80 font-semibold">
               <td className="px-3 py-2 text-slate-800">합계</td>
@@ -907,6 +929,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
   const rbd = data.inventory_summary?.find((x) => x.product === 'RBD');
   const rspo = data.inventory_summary?.find((x) => x.product === 'RSPO');
   const managed = data.inventory_summary?.find((x) => x.product === 'MANAGED');
+  const managedRspo = data.inventory_summary?.find((x) => x.product === 'MANAGED_RSPO');
   const fmtStock = (kg: number | null | undefined) => kg == null ? '-' : `${(kg / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}톤`;
   const stockUnit = (x: any) => {
     if (!x) return '';
@@ -954,7 +977,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
       </p>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 md:gap-4">
         <MetricCard label="FCPO 시황 (USD)" value={formatPrice(latestFCPO?.settlement_usd)} unit={`기준일: ${data.fcpo_latest_date || '-'}`} />
         <div className="card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between mb-1">
@@ -982,7 +1005,8 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
         </div>
         <MetricCard label="RBD 재고" value={fmtStock(rbd?.ending_stock)} unit={stockUnit(rbd)} />
         <MetricCard label="RSPO 재고" value={fmtStock(rspo?.ending_stock)} unit={stockUnit(rspo)} />
-        <MetricCard label="관리팜유 재고" value={fmtStock(managed?.ending_stock)} unit={stockUnit(managed)} />
+        <MetricCard label="관리팜유 RPO 재고" value={fmtStock(managed?.ending_stock)} unit={stockUnit(managed)} />
+        <MetricCard label="관리팜유 RSPO 재고" value={fmtStock(managedRspo?.ending_stock)} unit={stockUnit(managedRspo)} />
       </div>
 
       {/* 박스권 게이지 — 가로 전체폭 */}
@@ -1487,7 +1511,7 @@ const RiskPanel = () => {
   const fmtT = (kg: number | null | undefined) => kg == null ? '-' : `${Math.round(kg / 1000).toLocaleString()}톤`;
   const fmtUsd = (v: number | null | undefined) => v == null ? '-' : `$${Math.round(v).toLocaleString()}`;
   const fmtKrw = (v: number | null | undefined) => v == null ? '-' : `${(v / 1e8).toFixed(1)}억원`;
-  const PLABEL: Record<string, string> = { RBD: 'RBD', RSPO: 'RSPO', MANAGED: '관리팜유' };
+  const PLABEL: Record<string, string> = { RBD: 'RBD', RSPO: 'RSPO', MANAGED: '관리팜유 RPO', MANAGED_RSPO: '관리팜유 RSPO' };
   return (
     <div className="space-y-3">
       <div className="card p-3 bg-orange-50/40 border-orange-100">
@@ -1500,7 +1524,7 @@ const RiskPanel = () => {
         </div>
         <p className="text-[11px] text-slate-500 mt-1">{risk.signal}</p>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         {(risk.products as any[]).map(p => {
           const short = p.uncovered_kg > 0;
           return (
@@ -1555,7 +1579,7 @@ const RiskPanel = () => {
 
 // ============ 구매 전략 백테스트 패널 (구매이력 탭) ============
 const BacktestPanel = () => {
-  const [product, setProduct] = useState<'RBD' | 'RSPO' | 'MANAGED'>('RBD');
+  const [product, setProduct] = useState<'RBD' | 'RSPO' | 'MANAGED' | 'MANAGED_RSPO'>('RBD');
   const [from, setFrom] = useState('2021-01');
   const [bt, setBt] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1573,7 +1597,7 @@ const BacktestPanel = () => {
       <div className="card p-4 flex items-center gap-3 flex-wrap">
         <p className="text-sm font-semibold text-slate-700">🧪 구매 전략 백테스트</p>
         <select value={product} onChange={e => setProduct(e.target.value as any)} className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white">
-          <option value="RBD">RBD (실제 계약 비교)</option><option value="RSPO">RSPO</option><option value="MANAGED">관리팜유</option>
+          <option value="RBD">RBD (실제 계약 비교)</option><option value="RSPO">RSPO</option><option value="MANAGED">관리팜유 RPO</option><option value="MANAGED_RSPO">관리팜유 RSPO</option>
         </select>
         <span className="text-xs text-slate-500">시작</span>
         <select value={from} onChange={e => setFrom(e.target.value)} className="px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white">
@@ -3738,6 +3762,7 @@ const emptyPurchaseForm = {
   order_no: '', product: 'RBD', shipment_month: '', supplier: '', manufacturer: '',
   product_name: '', unit_price: '', qty_mt: '', amount_usd: '',
   incoterms: '', payment_terms: '', etd: '', contract_number: '', notes: '',
+  spec: 'RBD', prem_3mcpd: '', prem_ge: '', prem_rspo: '',
 };
 
 const PurchasesTab = () => {
@@ -3748,6 +3773,10 @@ const PurchasesTab = () => {
   const [prebuyData, setPrebuyData] = useState<PrebuyRow[]>([]);
   const [rbdPrebuy, setRbdPrebuy] = useState<PrebuyProductData | null>(null);
   const [rspoPrebuy, setRspoPrebuy] = useState<PrebuyProductData | null>(null);
+  const [managedPrebuy, setManagedPrebuy] = useState<PrebuyProductData | null>(null);
+  const [managedRspoPrebuy, setManagedRspoPrebuy] = useState<PrebuyProductData | null>(null);
+  const [bySpec, setBySpec] = useState<any[]>([]);
+  const [premiumBench, setPremiumBench] = useState<any[]>([]);
   const [prebuySummary, setPrebuySummary] = useState<PrebuyResponse['summary'] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -3798,7 +3827,7 @@ const PurchasesTab = () => {
   const pdfBulkRef = useRef<HTMLInputElement>(null);
 
   // Prebuy sub-tab & excluded months & period filter
-  const [prebuyView, setPrebuyView] = useState<'total' | 'rbd' | 'rspo'>('total');
+  const [prebuyView, setPrebuyView] = useState<'total' | 'rbd' | 'rspo' | 'managed' | 'managed_rspo'>('total');
   const [excludedMonths, setExcludedMonths] = useState<Set<string>>(new Set());
   const [periodFrom, setPeriodFrom] = useState<string>('');
   const [periodTo, setPeriodTo] = useState<string>('');
@@ -3833,6 +3862,10 @@ const PurchasesTab = () => {
       setPrebuyData(json.data || []);
       setRbdPrebuy(json.rbd || null);
       setRspoPrebuy(json.rspo || null);
+      setManagedPrebuy((json as any).managed || null);
+      setManagedRspoPrebuy((json as any).managed_rspo || null);
+      setBySpec((json as any).by_spec || []);
+      setPremiumBench((json as any).premium_benchmark || []);
       setPrebuySummary(json.summary || null);
     } catch (error) {
       console.error('Failed to fetch prebuy:', error);
@@ -3873,6 +3906,10 @@ const PurchasesTab = () => {
       etd: p.etd || '',
       contract_number: p.contract_number || '',
       notes: p.notes || '',
+      spec: specOf(p),
+      prem_3mcpd: p.prem_3mcpd != null ? String(p.prem_3mcpd) : '',
+      prem_ge: p.prem_ge != null ? String(p.prem_ge) : '',
+      prem_rspo: p.prem_rspo != null ? String(p.prem_rspo) : '',
     });
     setFormMode('edit');
     setEditId(p.id);
@@ -3900,7 +3937,12 @@ const PurchasesTab = () => {
         etd: form.etd || null,
         contract_number: form.contract_number || null,
         notes: form.notes || null,
+        spec: form.spec,
+        prem_3mcpd: form.prem_3mcpd === '' ? null : parseFloat(form.prem_3mcpd),
+        prem_ge: form.prem_ge === '' ? null : parseFloat(form.prem_ge),
+        prem_rspo: form.prem_rspo === '' ? null : parseFloat(form.prem_rspo),
       };
+      payload.product = productForSpec(form.spec);
 
       if (formMode === 'edit' && editId) {
         payload.id = editId;
@@ -4020,6 +4062,8 @@ const PurchasesTab = () => {
         incoterms: r.incoterms,
         contract_number: r.contract_number,
         notes,
+        spec: r.spec || specOf(r),
+        prem_3mcpd: r.prem_3mcpd ?? null, prem_ge: r.prem_ge ?? null, prem_rspo: r.prem_rspo ?? null,
       };
       try {
         const res = await fetch('/api/purchases', {
@@ -4304,10 +4348,8 @@ const PurchasesTab = () => {
                           <tr key={i} className={missing ? 'bg-rose-50/40' : 'hover:bg-slate-50/60'}>
                             <td className="px-2 py-1.5 text-slate-400 max-w-[110px] truncate" title={r.source_file}>{r.source_file}</td>
                             <td className="px-2 py-1.5">
-                              <select value={r.product || ''} onChange={e => updatePdfRecord(i, 'product', e.target.value)} className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white">
-                                <option value="RBD">RBD</option>
-                                <option value="RSPO">RSPO</option>
-                                <option value="MANAGED">관리팜유</option>
+                              <select value={r.spec || specOf(r)} onChange={e => { const sp = e.target.value; const d = defaultPremiums(sp); updatePdfRecord(i, 'spec', sp); updatePdfRecord(i, 'product', productForSpec(sp)); updatePdfRecord(i, 'prem_3mcpd', d.prem_3mcpd); updatePdfRecord(i, 'prem_ge', d.prem_ge); updatePdfRecord(i, 'prem_rspo', d.prem_rspo); }} className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white" title={`프리미엄 3-MCPD ${r.prem_3mcpd ?? 0} / GE ${r.prem_ge ?? 0} / RSPO ${r.prem_rspo ?? 0} (저장 후 수정 가능)`}>
+                                {SPEC_OPTIONS.map(s => <option key={s} value={s}>{SPEC_SHORT[s]}</option>)}
                               </select>
                             </td>
                             <td className="px-2 py-1.5"><input value={r.shipment_month || ''} onChange={e => updatePdfRecord(i, 'shipment_month', e.target.value)} placeholder="2026-06" className="w-20 text-xs border border-slate-200 rounded px-1 py-0.5 bg-white" /></td>
@@ -4345,12 +4387,22 @@ const PurchasesTab = () => {
                   <input type="text" value={form.order_no} onChange={(e) => setField('order_no', e.target.value)} placeholder="PO-001" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">상품 *</label>
-                  <select value={form.product} onChange={(e) => setField('product', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                    <option value="RBD">RBD</option>
-                    <option value="RSPO">RSPO</option>
+                  <label className="text-xs text-slate-500 mb-1 block">스펙 *</label>
+                  <select value={form.spec} onChange={(e) => { const sp = e.target.value; const d = defaultPremiums(sp); setForm(prev => ({ ...prev, spec: sp, product: productForSpec(sp), prem_3mcpd: d.prem_3mcpd ? String(d.prem_3mcpd) : '', prem_ge: d.prem_ge ? String(d.prem_ge) : '', prem_rspo: d.prem_rspo ? String(d.prem_rspo) : '' })); }} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    {SPEC_OPTIONS.map(s => <option key={s} value={s}>{SPEC_LABEL[s]}</option>)}
                   </select>
                 </div>
+                {form.spec !== 'RBD' && (
+                  <div className="md:col-span-2">
+                    <label className="text-xs text-slate-500 mb-1 block">프리미엄 분해 ($/MT) — 3-MCPD / GE / RSPO · Base(RBD 환산) = 단가 − 합계</label>
+                    <div className="flex items-center gap-2">
+                      <input type="number" step="0.5" value={form.prem_3mcpd} onChange={(e) => setField('prem_3mcpd', e.target.value)} placeholder="3-MCPD" title="3-MCPD 프리미엄" className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white text-right" />
+                      <input type="number" step="0.5" value={form.prem_ge} onChange={(e) => setField('prem_ge', e.target.value)} placeholder="GE" title="GE 프리미엄" className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white text-right" />
+                      <input type="number" step="0.5" value={form.prem_rspo} onChange={(e) => setField('prem_rspo', e.target.value)} placeholder="RSPO" title="RSPO 프리미엄" className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white text-right" />
+                      <span className="text-xs text-slate-500 tabular-nums">합 {((parseFloat(form.prem_3mcpd) || 0) + (parseFloat(form.prem_ge) || 0) + (parseFloat(form.prem_rspo) || 0)).toFixed(1)} → Base ${form.unit_price ? ((parseFloat(form.unit_price) || 0) - ((parseFloat(form.prem_3mcpd) || 0) + (parseFloat(form.prem_ge) || 0) + (parseFloat(form.prem_rspo) || 0))).toFixed(1) : '-'}</span>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <label className="text-xs text-slate-500 mb-1 block">선적월 *</label>
                   <input type="month" value={form.shipment_month} onChange={(e) => setField('shipment_month', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
@@ -4454,7 +4506,7 @@ const PurchasesTab = () => {
                           <tr className="hover:bg-slate-50/60 transition-colors group">
                             <td className="px-3 py-2.5 text-xs text-slate-400">{p.order_no || p.id}</td>
                             <td className="px-3 py-2.5 font-medium text-slate-800">
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.product === 'RBD' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{p.product}</span>
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.product === 'RBD' ? 'bg-blue-50 text-blue-700' : p.product === 'RSPO' ? 'bg-emerald-50 text-emerald-700' : p.product === 'MANAGED_RSPO' ? 'bg-violet-50 text-violet-700' : 'bg-amber-50 text-amber-700'}`} title={p.prem_3mcpd != null || p.prem_ge != null || p.prem_rspo != null ? `Base $${p.base_price ?? '-'} + 3-MCPD ${p.prem_3mcpd ?? 0} + GE ${p.prem_ge ?? 0} + RSPO ${p.prem_rspo ?? 0}` : PRODUCT_LABEL[p.product as keyof typeof PRODUCT_LABEL] ?? p.product}>{SPEC_SHORT[specOf(p)]}</span>
                             </td>
                             <td className="px-3 py-2.5 tabular-nums text-slate-600">{p.shipment_month}</td>
                             <td className="px-3 py-2.5 text-slate-600 text-xs">{p.supplier || '-'}</td>
@@ -4518,6 +4570,8 @@ const PurchasesTab = () => {
         const sourceRows: PrebuyRow[] =
           prebuyView === 'rbd' ? (rbdPrebuy?.rows || []) :
           prebuyView === 'rspo' ? (rspoPrebuy?.rows || []) :
+          prebuyView === 'managed' ? (managedPrebuy?.rows || []) :
+          prebuyView === 'managed_rspo' ? (managedRspoPrebuy?.rows || []) :
           prebuyData;
         const periodRows = sourceRows.filter(r => inPeriod(r.shipment_month));
 
@@ -4542,8 +4596,12 @@ const PurchasesTab = () => {
           months: rows.length,
           success: rows.filter(r => r.effect_usd > 0).length,
         });
+        const managedRows = (managedPrebuy?.rows || []).filter(r => inPeriod(r.shipment_month) && !excludedMonths.has(r.shipment_month));
+        const managedRspoRows = (managedRspoPrebuy?.rows || []).filter(r => inPeriod(r.shipment_month) && !excludedMonths.has(r.shipment_month));
         const rbdSum = sumUp(rbdRows);
         const rspoSum = sumUp(rspoRows);
+        const managedSum = sumUp(managedRows);
+        const managedRspoSum = sumUp(managedRspoRows);
         const totalSum = sumUp(combinedRows);
 
         // Helper: color based on USD effect (positive = 절감)
@@ -4613,12 +4671,12 @@ const PurchasesTab = () => {
         <>
           {/* Prebuy sub-tabs + exchange rate + period */}
           <div className="flex items-center gap-2 flex-wrap">
-            {(['total', 'rbd', 'rspo'] as const).map(v => (
+            {(['total', 'rbd', 'rspo', 'managed', 'managed_rspo'] as const).map(v => (
               <button key={v} onClick={() => setPrebuyView(v)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                   prebuyView === v ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}>
-                {v === 'total' ? '총 효과 분석' : v === 'rbd' ? 'RBD Palm Oil' : 'RSPO(MB)'}
+                {v === 'total' ? '총 효과 분석' : v === 'rbd' ? 'RBD Palm Oil' : v === 'rspo' ? 'RSPO(MB)' : v === 'managed' ? '관리팜유 RPO' : '관리팜유 RSPO'}
               </button>
             ))}
             {excludedMonths.size > 0 && (
@@ -4732,7 +4790,9 @@ const PurchasesTab = () => {
                       {[
                         { label: 'RBD Palm Oil', badge: 'bg-blue-50 text-blue-700', sum: rbdSum },
                         { label: 'RSPO(MB)', badge: 'bg-emerald-50 text-emerald-700', sum: rspoSum },
-                      ].map(({ label, badge, sum }) => (
+                        { label: '관리팜유 RPO (3-MCPD ±GE)', badge: 'bg-amber-50 text-amber-700', sum: managedSum },
+                        { label: '관리팜유 RSPO (3-MCPD ±GE +RSPO)', badge: 'bg-violet-50 text-violet-700', sum: managedRspoSum },
+                      ].filter(r => r.sum.months > 0 || r.label === 'RBD Palm Oil' || r.label === 'RSPO(MB)').map(({ label, badge, sum }) => (
                         <tr key={label} className="hover:bg-slate-50/60">
                           <td className="px-5 py-3.5 font-medium text-slate-800">
                             <span className={`${badge} px-2.5 py-0.5 rounded-full text-xs font-medium`}>{label}</span>
@@ -4762,6 +4822,58 @@ const PurchasesTab = () => {
                   </table>
                 </div>
               </div>
+
+              {/* 스펙별 요약 + 공급사 프리미엄 벤치마크 */}
+              {(bySpec.length > 0 || premiumBench.length > 0) && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="card overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-50 border-b border-slate-200"><p className="text-xs font-semibold text-slate-600">스펙별 구매 요약 (전 기간) — Base = 단가 − 프리미엄 (RBD 환산)</p></div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead><tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500"><th className="px-3 py-2 text-left">스펙</th><th className="px-3 py-2 text-right">건</th><th className="px-3 py-2 text-right">MT</th><th className="px-3 py-2 text-right">평균 단가</th><th className="px-3 py-2 text-right">평균 프리미엄</th><th className="px-3 py-2 text-right">Base</th><th className="px-3 py-2 text-right">RBD 시황</th><th className="px-3 py-2 text-right">효과(USD)</th></tr></thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {bySpec.map((s: any) => (
+                            <tr key={s.spec} className="tabular-nums">
+                              <td className="px-3 py-1.5 font-medium text-slate-700">{SPEC_LABEL[s.spec as keyof typeof SPEC_LABEL] ?? s.spec}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{s.n}</td>
+                              <td className="px-3 py-1.5 text-right">{formatNumber(s.qty, 0)}</td>
+                              <td className="px-3 py-1.5 text-right font-semibold">${formatNumber(s.wavg_price, 1)}</td>
+                              <td className="px-3 py-1.5 text-right text-amber-700">+{formatNumber(s.avg_premium, 1)}</td>
+                              <td className="px-3 py-1.5 text-right">${formatNumber(s.wavg_base, 1)}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{s.avg_market != null ? `$${formatNumber(s.avg_market, 1)}` : '-'}</td>
+                              <td className={`px-3 py-1.5 text-right font-semibold ${eColor(s.effect_usd)}`}>${formatNumber(s.effect_usd, 0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="card overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-50 border-b border-slate-200"><p className="text-xs font-semibold text-slate-600">공급사별 프리미엄 벤치마크 ($/MT, 물량 가중) — 다음 비딩 협상 근거</p></div>
+                    {premiumBench.length === 0 ? <p className="p-4 text-xs text-slate-400">프리미엄 분해값이 저장된 계약이 없습니다.</p> : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead><tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500"><th className="px-3 py-2 text-left">공급사</th><th className="px-3 py-2 text-left">스펙</th><th className="px-3 py-2 text-right">건</th><th className="px-3 py-2 text-right">3-MCPD</th><th className="px-3 py-2 text-right">GE</th><th className="px-3 py-2 text-right">RSPO</th><th className="px-3 py-2 text-right">합계</th><th className="px-3 py-2 text-left">선적월</th></tr></thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {premiumBench.map((b: any) => (
+                            <tr key={`${b.supplier}-${b.spec}`} className="tabular-nums">
+                              <td className="px-3 py-1.5 font-medium text-slate-700">{b.supplier}</td>
+                              <td className="px-3 py-1.5 text-slate-600">{SPEC_SHORT[b.spec as keyof typeof SPEC_SHORT] ?? b.spec}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{b.n}</td>
+                              <td className="px-3 py-1.5 text-right">{b.avg_3mcpd ? formatNumber(b.avg_3mcpd, 1) : '-'}</td>
+                              <td className="px-3 py-1.5 text-right">{b.avg_ge ? formatNumber(b.avg_ge, 1) : '-'}</td>
+                              <td className="px-3 py-1.5 text-right">{b.avg_rspo ? formatNumber(b.avg_rspo, 1) : '-'}</td>
+                              <td className="px-3 py-1.5 text-right font-semibold text-amber-700">+{formatNumber(b.avg_total, 1)}</td>
+                              <td className="px-3 py-1.5 text-[10px] text-slate-400">{b.months.join(', ')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Monthly Detail Table with expandable purchase sub-rows */}
               {periodRows.length > 0 && (

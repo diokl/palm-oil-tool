@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { specFromFlags, productForSpec, defaultPremiums } from '@/lib/spec';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
@@ -156,9 +157,12 @@ Fields:
 - contract_number: contract / SC reference number (e.g. "S55273/2606", "40409698")
 - contract_date: trade/contract date in YYYY-MM-DD (look for "Date of Trade", "DATE")
 - product: classify by specifications —
-    * "MANAGED" if BOTH 3-MCPD (low, e.g. 2.5 ppm max) AND GE/Glycidyl Esters control are specified (관리팜유 = Low 3-MCPD + Low GE + RSPO)
-    * "RSPO" if RSPO / Mass Balance but NO 3-MCPD/GE control
+    * "MANAGED" if Low 3-MCPD control (e.g. 2.5 ppm max) is specified (관리팜유). GE / RSPO may or may not be present — report them in the flags below.
+    * "RSPO" if RSPO / Mass Balance but NO 3-MCPD control
     * "RBD" for plain RBD palm oil
+- has_3mcpd: true if a Low 3-MCPD limit is specified
+- has_ge: true if GE / Glycidyl Esters limit is specified
+- has_rspo: true if RSPO / Mass Balance (MB) certification is specified
 - qty_mt: quantity in metric tons (number only, ignore +/- tolerance)
 - unit_price: price in USD per MT (number only)
 - shipment_month: in YYYY-MM format (e.g. "JUNE 2026" -> "2026-06")
@@ -202,9 +206,15 @@ Use null for fields you cannot extract. Return ONLY valid JSON, no markdown.`,
     const qty = extracted.qty_mt ?? extracted.quantity_mt ?? null;
     const price = extracted.unit_price ?? extracted.contract_price ?? null;
     const rawProduct = String(extracted.product || '').toUpperCase();
-    const product = ['MANAGED', 'RSPO', 'RBD'].includes(rawProduct) ? rawProduct : 'RBD';
+    const managed = rawProduct === 'MANAGED' || extracted.has_3mcpd === true;
+    const spec = specFromFlags({ managed, ge: extracted.has_ge === true, rspo: extracted.has_rspo === true || rawProduct === 'RSPO' });
+    const product = productForSpec(spec);
+    const prem = defaultPremiums(spec);
     const normalized = {
       product,
+      spec,
+      ...prem,
+      base_price: price != null ? Number(price) - prem.prem_3mcpd - prem.prem_ge - prem.prem_rspo : null,
       shipment_month: extracted.shipment_month ?? null,
       unit_price: price != null ? Number(price) : null,
       qty_mt: qty != null ? Number(qty) : null,

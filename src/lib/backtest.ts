@@ -14,7 +14,7 @@ import { dbAll } from './db';
 //   box_full    : '전량구매' 구간(20일 이평 − σ 이하) 첫 진입일, 미발생 시 마지막 날
 //   spot_month  : 선적월 M 동안의 M월물 평균 = 도구의 '구매 당월시황' (선구매 안 했을 때의 벤치마크)
 //   best / worst: 기간 내 최저/최고 (사후 완벽 정보)
-//   actual      : purchases 테이블 실제 계약 가중평균 (RBD/RSPO/MANAGED 선택)
+//   actual      : purchases 테이블 실제 계약의 RBD 환산가(base_price) 가중평균 (RBD/RSPO/관리팜유 RPO·RSPO 선택)
 //
 // 평가: 각 전략의 평균 단가, spot_month 대비 절감(USD/MT), 승률(spot 보다 쌌던 달 비율), 기간 내 백분위.
 
@@ -98,7 +98,8 @@ export async function runBacktest(opts: { product?: string; from?: string; to?: 
 
   // 실제 계약 (가중평균)
   const actualRows = await dbAll(
-    `SELECT shipment_month, SUM(qty_mt) AS qty, SUM(qty_mt * unit_price) / NULLIF(SUM(qty_mt), 0) AS wavg
+    // 실제 계약은 RBD 환산가(base_price = 단가 − 스펙 프리미엄)로 비교 → 시황(RBD)과 같은 기준
+    `SELECT shipment_month, SUM(qty_mt) AS qty, SUM(qty_mt * COALESCE(base_price, unit_price)) / NULLIF(SUM(qty_mt), 0) AS wavg
      FROM purchases WHERE product = ? AND shipment_month ~ '^[0-9]{4}-[0-9]{2}$' GROUP BY shipment_month`,
     [product],
   ) as { shipment_month: string; qty: number; wavg: number }[];

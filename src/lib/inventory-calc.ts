@@ -135,7 +135,7 @@ export async function recalcInventory(
 export async function generateAlerts(persist = false): Promise<Alert[]> {
   const alerts: Alert[] = [];
 
-  for (const product of ['RBD', 'RSPO', 'MANAGED'] as const) {
+  for (const product of ['RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO'] as const) {
     const rows = await dbAll(
       `SELECT * FROM inventory WHERE product = ? ORDER BY year ASC, month ASC`,
       [product]

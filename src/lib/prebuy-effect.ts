@@ -3,10 +3,13 @@ import type { Product } from './types';
 // 제품별 RBD 대비 정상 프리미엄 (USD/MT)
 // 엑셀 '3개월 선구매 정리' L18~L20 검증된 값.
 // RBD(일반팜유)는 기준이므로 0, RSPO는 +$25, 관리팜유(3-MCPD+GE+RSPO)는 +$65.
+// 계약별 분해 프리미엄(prem_3mcpd/prem_ge/prem_rspo)이 저장된 건은 그 합(premium_override)을 우선 사용하고,
+// 아래는 분해값이 없는 과거 행의 기본값: 관리팜유 RPO = 3-MCPD 10 + GE 30 = 40, 관리팜유 RSPO = 40 + 25 = 65.
 export const PRODUCT_PREMIUM_USD: Record<Product, number> = {
   RBD: 0,
   RSPO: 25,
-  MANAGED: 65,
+  MANAGED: 40,
+  MANAGED_RSPO: 65,
 };
 
 export const DEFAULT_EXCHANGE_RATE = 1450;
@@ -17,6 +20,7 @@ export interface PrebuyEffectInput {
   market_price_rbd: number; // RBD 기준 시황가 (USD/MT). RSPO/MANAGED도 동일 RBD 시황가를 넘김.
   qty_mt: number;
   exchange_rate?: number; // 기본 1,450 KRW/USD
+  premium_override?: number | null; // 계약별 프리미엄 합(3-MCPD+GE+RSPO). 있으면 제품 기본값 대신 사용
 }
 
 export interface PrebuyEffectResult {
@@ -42,7 +46,7 @@ export interface PrebuyEffectResult {
 //   효과 = ((계약가 - (RBD시황 + 프리미엄)) × 수량) × 환율
 // 음수 = 절감(시황+프리미엄보다 싸게 구매했음) → '성공'
 export function calculatePrebuyEffect(input: PrebuyEffectInput): PrebuyEffectResult {
-  const premium = PRODUCT_PREMIUM_USD[input.product];
+  const premium = input.premium_override ?? PRODUCT_PREMIUM_USD[input.product];
   const normalizedMarket = input.market_price_rbd + premium;
   const er = input.exchange_rate ?? DEFAULT_EXCHANGE_RATE;
   const effectExcelUsd = (input.contract_price - normalizedMarket) * input.qty_mt;
@@ -87,6 +91,7 @@ export function calculatePrebuyEffectBatch(inputs: PrebuyEffectInput[]): PrebuyE
     RBD:     { effect_excel_usd: 0, effect_excel_krw: 0, savings_usd: 0, savings_krw: 0, qty_mt: 0, contract_amount_usd: 0 },
     RSPO:    { effect_excel_usd: 0, effect_excel_krw: 0, savings_usd: 0, savings_krw: 0, qty_mt: 0, contract_amount_usd: 0 },
     MANAGED: { effect_excel_usd: 0, effect_excel_krw: 0, savings_usd: 0, savings_krw: 0, qty_mt: 0, contract_amount_usd: 0 },
+    MANAGED_RSPO: { effect_excel_usd: 0, effect_excel_krw: 0, savings_usd: 0, savings_krw: 0, qty_mt: 0, contract_amount_usd: 0 },
   };
 
   for (const it of items) {

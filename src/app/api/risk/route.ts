@@ -19,7 +19,7 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
     const product = String(body.product || '');
-    if (!['RBD', 'RSPO', 'MANAGED'].includes(product)) return NextResponse.json({ error: 'invalid product' }, { status: 400 });
+    if (!['RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO'].includes(product)) return NextResponse.json({ error: 'invalid product' }, { status: 400 });
     const price = Number(body.plan_price);
     if (!(price > 0)) return NextResponse.json({ error: 'plan_price must be > 0' }, { status: 400 });
     await dbRun(

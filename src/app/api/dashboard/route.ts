@@ -6,6 +6,7 @@ import { calculateBoxRange } from '@/lib/box-range';
 import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
 import { getOilSpread } from '@/lib/oil-spread';
 import { getSupplyDemand } from '@/lib/supply-demand';
+import { premiumOverride } from '@/lib/spec';
 import type { Product } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -75,7 +76,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
     ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number; customs_volume: number }[];
     const byProduct: Record<string, typeof invRows> = {};
     for (const r of invRows) (byProduct[r.product] ??= []).push(r);
-    const inventorySummary = ['RBD', 'RSPO', 'MANAGED'].map((prod) => {
+    const inventorySummary = ['RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO'].map((prod) => {
       const rows = byProduct[prod];
       if (!rows || rows.length === 0) return null;
       const past = rows.filter((r) => r.year * 12 + r.month <= cutoff);
@@ -197,6 +198,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
         const rbdP     = purchases.filter((p: any) => p.product === 'RBD');
         const rspoP    = purchases.filter((p: any) => p.product === 'RSPO');
         const managedP = purchases.filter((p: any) => p.product === 'MANAGED');
+        const managedRspoP = purchases.filter((p: any) => p.product === 'MANAGED_RSPO');
 
         // Per-purchase effect with per-purchase exchange_rate.
         // 프리미엄 자동 가산 (RBD:0 / RSPO:+25 / MANAGED:+65) — prebuy-effect.ts 위임.
@@ -213,6 +215,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
                 market_price_rbd: Number(p.market_price_usd),
                 qty_mt: p.qty_mt || 0,
                 exchange_rate: er,
+                premium_override: premiumOverride(p),
               });
               // 양수=절감 (savings 부호) — 기존 대시보드 표시 호환
               effectUsd += r.savings_usd;
@@ -225,6 +228,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
         const rbdS     = calcGroup(rbdP);
         const rspoS    = calcGroup(rspoP);
         const managedS = calcGroup(managedP);
+        const managedRspoS = calcGroup(managedRspoP);
 
         months.push({
           shipment_month: month,
@@ -234,10 +238,12 @@ async function buildDashboard(): Promise<Record<string, any>> {
           rspo_effect_usd: rspoS.effectUsd, rspo_effect_krw: rspoS.effectKrw,
           managed_qty: managedS.qty, managed_amount: managedS.amount,
           managed_effect_usd: managedS.effectUsd, managed_effect_krw: managedS.effectKrw,
-          total_qty: rbdS.qty + rspoS.qty + managedS.qty,
-          total_amount: rbdS.amount + rspoS.amount + managedS.amount,
-          effect_usd: rbdS.effectUsd + rspoS.effectUsd + managedS.effectUsd,
-          effect_krw: rbdS.effectKrw + rspoS.effectKrw + managedS.effectKrw,
+          managed_rspo_qty: managedRspoS.qty, managed_rspo_amount: managedRspoS.amount,
+          managed_rspo_effect_usd: managedRspoS.effectUsd, managed_rspo_effect_krw: managedRspoS.effectKrw,
+          total_qty: rbdS.qty + rspoS.qty + managedS.qty + managedRspoS.qty,
+          total_amount: rbdS.amount + rspoS.amount + managedS.amount + managedRspoS.amount,
+          effect_usd: rbdS.effectUsd + rspoS.effectUsd + managedS.effectUsd + managedRspoS.effectUsd,
+          effect_krw: rbdS.effectKrw + rspoS.effectKrw + managedS.effectKrw + managedRspoS.effectKrw,
         });
       }
 

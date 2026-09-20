@@ -10,7 +10,7 @@ export interface FcpoSettlement {
 }
 
 // ===== Inventory =====
-export type Product = 'RBD' | 'RSPO' | 'MANAGED'; // MANAGED = 3-MCPD+GE+RSPO 관리팜유
+export type Product = 'RBD' | 'RSPO' | 'MANAGED' | 'MANAGED_RSPO'; // MANAGED = 관리팜유 RPO(Low 3-MCPD, ±GE), MANAGED_RSPO = 관리팜유 RSPO(+RSPO MB). 세부 스펙은 purchases.spec (lib/spec.ts)
 
 export interface InventoryRow {
   id?: number;

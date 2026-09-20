@@ -10,9 +10,9 @@ import { dbAll } from './db';
 // 3) 계획단가: mgd_config 의 plan_price_<PRODUCT> (USD/MT). 올해 선적분 실제 가중평균 + 잔여 물량을 현재가로 샀을 때의
 //    연간 예상 평균단가 → 계획 대비 괴리와 예산 영향(USD·KRW).
 
-export type Product = 'RBD' | 'RSPO' | 'MANAGED';
-const PRODUCTS: Product[] = ['RBD', 'RSPO', 'MANAGED'];
-const PREMIUM: Record<Product, number> = { RBD: 0, RSPO: 25, MANAGED: 65 }; // RBD 시황 대비 제품 프리미엄 (prebuy-effect 와 동일)
+export type Product = 'RBD' | 'RSPO' | 'MANAGED' | 'MANAGED_RSPO';
+const PRODUCTS: Product[] = ['RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO'];
+const PREMIUM: Record<Product, number> = { RBD: 0, RSPO: 25, MANAGED: 40, MANAGED_RSPO: 65 }; // RBD 시황 대비 제품 기본 프리미엄 (prebuy-effect 와 동일)
 
 export interface MonthFlow { ym: string; usage: number; customs: number; ending: number; shortfall: number }
 export interface ProductExposure {
