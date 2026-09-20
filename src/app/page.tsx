@@ -11,12 +11,13 @@ import {
   RECO_DEFAULT, type RecoConfig,
 } from '@/lib/mgd-core';
 import { SPEC_OPTIONS, SPEC_LABEL, SPEC_SHORT, PRODUCT_LABEL, productForSpec, defaultPremiums, specOf } from '@/lib/spec';
+import { GLOSSARY, GLOSSARY_CATEGORIES } from '@/lib/glossary';
 
 // ============ AUTH CONTEXT ============
 const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrite: false, role: 'user' });
 const useAuth = () => useContext(AuthContext);
 
-type Tab = 'dashboard' | 'fcpo' | 'soybean' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin';
+type Tab = 'dashboard' | 'fcpo' | 'soybean' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin' | 'glossary';
 type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026' | 'managed2026' | 'managedrspo2026';
 
 const INVENTORY_SUB_TABS: { id: InventorySubTab; label: string; product: 'RBD' | 'RSPO' | 'MANAGED' | 'MANAGED_RSPO'; year: number }[] = [
@@ -6990,6 +6991,56 @@ interface AdminUser {
   created_at: string;
 }
 
+// ============ 용어집 (관리자 전용) ============
+// 정의는 lib/glossary.ts 에 데이터로 관리 — 항목 추가는 그 파일에.
+const GlossaryTab = () => {
+  const [q, setQ] = useState('');
+  const [cat, setCat] = useState<string>('all');
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '');
+  const needle = norm(q);
+  const rows = GLOSSARY.filter(t => (cat === 'all' || t.category === cat) && (!needle || norm(`${t.term} ${t.en ?? ''} ${t.definition} ${t.reading ?? ''} ${t.formula ?? ''}`).includes(needle)));
+  const grouped = GLOSSARY_CATEGORIES.map(c => ({ c, items: rows.filter(r => r.category === c) })).filter(g => g.items.length > 0);
+  return (
+    <div className="space-y-4 animate-fade-in">
+      <div className="card p-4 flex items-center gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-slate-800">📖 용어집</h2>
+          <p className="text-xs text-slate-500 mt-0.5">도구에 나오는 지표·용어의 정의, 계산식, 해석, 출처. 관리자만 볼 수 있습니다.</p>
+        </div>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="검색 (예: POGO, 재고/수출, GE)" className="ml-auto w-64 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+        <select value={cat} onChange={e => setCat(e.target.value)} className="px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+          <option value="all">전체 분류</option>
+          {GLOSSARY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <span className="text-xs text-slate-400">{rows.length}개 항목</span>
+      </div>
+      {grouped.length === 0 && <div className="card p-8 text-center text-sm text-slate-500">검색 결과가 없습니다.</div>}
+      {grouped.map(g => (
+        <div key={g.c} className="card overflow-hidden">
+          <div className="px-5 py-3 bg-slate-50 border-b border-slate-200"><p className="text-sm font-semibold text-slate-700">{g.c} <span className="text-xs font-normal text-slate-400">({g.items.length})</span></p></div>
+          <div className="divide-y divide-slate-100">
+            {g.items.map(t => (
+              <div key={t.term} className="px-5 py-3 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">{t.term}</p>
+                  {t.en && <p className="text-[11px] text-slate-400">{t.en}</p>}
+                  {t.where && <p className="text-[11px] text-blue-500 mt-1">📍 {t.where}</p>}
+                </div>
+                <div className="text-xs text-slate-700 space-y-1">
+                  <p>{t.definition}</p>
+                  {t.formula && <p className="font-mono text-[11px] text-slate-600 bg-slate-50 rounded px-2 py-1 inline-block">{t.formula}</p>}
+                  {t.reading && <p className="text-slate-600"><span className="text-slate-400">해석 · </span>{t.reading}</p>}
+                  {t.source && <p className="text-[11px] text-slate-400">출처 · {t.source}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const AdminTab = () => {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -7327,6 +7378,7 @@ export default function Home() {
     { title: null, divider: true, items: [
       { id: 'alerts', label: '알림', icon: 'bell' },
       { id: 'admin', label: '관리자', icon: 'settings', masterOnly: true },
+      { id: 'glossary', label: '용어집', icon: 'file-check', masterOnly: true },
     ]},
   ];
   const allNavItems: NavItem[] = navSections.flatMap(s => s.items);
@@ -7481,6 +7533,7 @@ export default function Home() {
           {activeTab === 'lc' && <LCTab key={`lc-${refreshTick}`} />}
           {activeTab === 'doc-verify' && <DocVerifyTab key={`dv-${refreshTick}`} />}
           {activeTab === 'admin' && userRole === 'master' && <AdminTab key={`adm-${refreshTick}`} />}
+          {activeTab === 'glossary' && userRole === 'master' && <GlossaryTab />}
         </div>
       </main>
     </div>
