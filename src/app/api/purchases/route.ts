@@ -302,8 +302,8 @@ async function handlePrebuySummary() {
   const benchMap = new Map<string, { supplier: string; spec: string; n: number; qty: number; s3: number; sge: number; srspo: number; months: Set<string> }>();
   for (const d of allDetails) {
     if (d.prem_3mcpd == null && d.prem_ge == null && d.prem_rspo == null) continue;
-    if (d.spec === 'RBD') continue;
-    const supplier = (d.supplier || '-').trim().split(/\s+/)[0].toUpperCase();
+    if (d.spec === 'RBD' || !d.supplier) continue; // 공급사 미기재(과거 일괄 입력) 건은 벤치마크 제외
+    const supplier = d.supplier.trim().split(/\s+/)[0].toUpperCase();
     const key = `${supplier}|${d.spec}`;
     const g = benchMap.get(key) ?? { supplier, spec: d.spec, n: 0, qty: 0, s3: 0, sge: 0, srspo: 0, months: new Set<string>() };
     const q = d.qty_mt || 0;
