@@ -12,12 +12,13 @@ import {
 } from '@/lib/mgd-core';
 import { SPEC_OPTIONS, SPEC_LABEL, SPEC_SHORT, PRODUCT_LABEL, productForSpec, defaultPremiums, specOf } from '@/lib/spec';
 import { GLOSSARY, GLOSSARY_CATEGORIES } from '@/lib/glossary';
+import { EXPORT_TARGETS } from '@/lib/export-targets';
 
 // ============ AUTH CONTEXT ============
 const AuthContext = createContext<{ canWrite: boolean; role: string }>({ canWrite: false, role: 'user' });
 const useAuth = () => useContext(AuthContext);
 
-type Tab = 'dashboard' | 'fcpo' | 'soybean' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin' | 'glossary';
+type Tab = 'dashboard' | 'fcpo' | 'soybean' | 'inventory' | 'box-range' | 'purchases' | 'news' | 'alerts' | 'lc' | 'doc-verify' | 'mpob' | 'admin' | 'glossary' | 'export';
 type InventorySubTab = 'rbd2025' | 'rbd2026' | 'rspo2025' | 'rspo2026' | 'managed2026' | 'managedrspo2026';
 
 const INVENTORY_SUB_TABS: { id: InventorySubTab; label: string; product: 'RBD' | 'RSPO' | 'MANAGED' | 'MANAGED_RSPO'; year: number }[] = [
@@ -6991,6 +6992,51 @@ interface AdminUser {
   created_at: string;
 }
 
+// ============ 엑셀 내보내기 ============
+// 탭별 워크북(데이터 시트 + 계산방식 시트). 선구매 효과·재고관리·박스권 일별·환율 시계열은 엑셀 수식으로 들어가 열어서 재계산 가능.
+const ExportTab = () => {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const download = async (target: string, label: string) => {
+    setBusy(target); setMsg(null);
+    try {
+      const res = await fetch(`/api/export?target=${target}`);
+      if (!res.ok) { const j = await res.json().catch(() => ({})); setMsg(`${label} 실패: ${j.error || res.status}`); return; }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename\*=UTF-8''([^;]+)/);
+      const name = m ? decodeURIComponent(m[1]) : `PalmOil_${target}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setMsg(`${name} 다운로드 완료`);
+    } catch (e: any) { setMsg(`${label} 실패: ${e.message}`); } finally { setBusy(null); }
+  };
+  return (
+    <div className="space-y-4 animate-fade-in">
+      <div className="card p-5">
+        <h2 className="text-lg font-bold text-slate-800">📥 엑셀 내보내기</h2>
+        <p className="text-xs text-slate-500 mt-1">탭별 워크북을 내려받습니다. 각 파일에 데이터 시트와 <b>계산방식</b> 시트가 들어 있고, 선구매 효과·재고관리·박스권 일별·환율 시계열은 값이 아니라 <b>엑셀 수식</b>으로 들어가 있어 열어서 검증하거나 숫자를 바꿔 재계산할 수 있습니다.</p>
+        {msg && <div className="mt-3 px-3 py-2 rounded-lg text-xs bg-emerald-50 text-emerald-700 border border-emerald-100">{msg}</div>}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        {EXPORT_TARGETS.map(t => (
+          <div key={t.id} className="card p-4 flex flex-col">
+            <p className="text-sm font-semibold text-slate-800">{t.label}</p>
+            <p className="text-[11px] text-slate-500 mt-1 flex-1">{t.desc}</p>
+            <button onClick={() => download(t.id, t.label)} disabled={busy !== null} className="mt-3 px-3 py-2 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 font-medium">{busy === t.id ? '생성 중...' : '⬇ .xlsx 다운로드'}</button>
+          </div>
+        ))}
+        <div className="card p-4 flex flex-col border-blue-200 bg-blue-50/30">
+          <p className="text-sm font-semibold text-slate-800">전체 (한 파일)</p>
+          <p className="text-[11px] text-slate-500 mt-1 flex-1">위 모든 탭의 시트를 한 워크북에 모음 (시트명 앞에 탭 이름). 생성에 20~40초 걸릴 수 있습니다.</p>
+          <button onClick={() => download('all', '전체')} disabled={busy !== null} className="mt-3 px-3 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">{busy === 'all' ? '생성 중...' : '⬇ 전체 .xlsx'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ============ 용어집 (관리자 전용) ============
 // 정의는 lib/glossary.ts 에 데이터로 관리 — 항목 추가는 그 파일에.
 const GlossaryTab = () => {
@@ -7372,6 +7418,7 @@ export default function Home() {
       { id: 'inventory', label: '재고 관리', icon: 'package' },
     ]},
     { title: '무역 실무', items: [
+      { id: 'export', label: '엑셀 내보내기', icon: 'file-text' },
       { id: 'lc', label: 'LC 개설', icon: 'file-text' },
       { id: 'doc-verify', label: '서류 검증', icon: 'file-check' },
     ]},
@@ -7534,6 +7581,7 @@ export default function Home() {
           {activeTab === 'doc-verify' && <DocVerifyTab key={`dv-${refreshTick}`} />}
           {activeTab === 'admin' && userRole === 'master' && <AdminTab key={`adm-${refreshTick}`} />}
           {activeTab === 'glossary' && userRole === 'master' && <GlossaryTab />}
+          {activeTab === 'export' && <ExportTab />}
         </div>
       </main>
     </div>
