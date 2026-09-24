@@ -147,7 +147,7 @@ export async function buildInventory(wb = XLSX.utils.book_new()) {
   }
   add(wb, '계산방식', methodSheet([
     ['기말재고', '전월 기말재고 + 통관수량 − 예상소요량 − 판매량. 실재고 반영값(E열)이 있으면 그 값 채택. 1월은 전년 12월 기말(B2)에서 시작'],
-    ['재고회전(개월)', '기말재고 ÷ 당월 예상소요량 (소요 0이면 0)'],
+    ['재고회전(개월)', '기말재고 ÷ 당월 예상소요량 (소요 0이면 0). 소요가 달라지는 달(관리팜유 RSPO 10월 구분 투입 등)은 대시보드의 선행 커버 참고'],
     ['통관수량', '구매이력 자동 동기화: 같은 제품의 (선적월 + 1개월) 계약 수량 합 × 1,000. 셀 직접 수정도 가능'],
     ['관리팜유 RPO / RSPO', 'RSPO 포함 스펙(3-MCPD+RSPO, 3-MCPD+GE+RSPO)은 관리팜유 RSPO, 나머지 관리팜유는 RPO 로 분리 관리'],
     ...glossaryLines(['실재고 반영값', '재고회전(개월)', '구매 알람']),
@@ -323,7 +323,7 @@ export async function buildAlerts(wb = XLSX.utils.book_new()) {
   add(wb, '6개월 재고 흐름', sheetFromRows(flows, ['제품', '월', '예상소요', '계약 통관', '기말재고', '부족분']));
   add(wb, '제품별 노출', sheetFromRows(risk.products.map(p => ({ '제품': PRODUCT_LABEL[p.product], '미확정 물량(kg)': p.uncovered_kg, '첫 부족월': p.first_shortage_ym, '기준가(RBD+프리미엄)': p.ref_price, '현재가 매입 시(USD)': p.cost_now_usd, 'VaR95 1개월(USD)': p.var1m_usd, 'VaR95 3개월(USD)': p.var3m_usd, 'VaR95 3개월(KRW)': p.var3m_krw, '계획단가': p.plan.plan_price, '올해 계약(MT)': p.plan.ytd_qty_mt, '올해 가중평균': p.plan.ytd_wavg, '잔여 미계약(kg)': p.plan.remaining_kg, '연간 예상 평균': p.plan.projected_avg, '계획 대비': p.plan.gap_vs_plan, '예산 영향(KRW)': p.plan.budget_impact_krw })), ['제품', '미확정 물량(kg)', '첫 부족월', '기준가(RBD+프리미엄)', '현재가 매입 시(USD)', 'VaR95 1개월(USD)', 'VaR95 3개월(USD)', 'VaR95 3개월(KRW)', '계획단가', '올해 계약(MT)', '올해 가중평균', '잔여 미계약(kg)', '연간 예상 평균', '계획 대비', '예산 영향(KRW)']));
   add(wb, '계산방식', methodSheet([
-    ['알람 레벨', '재고회전 ≤ 1.5개월 긴급, ≤ 2.5 경고. 기말재고 음수 첫 달 = 소진 예상월, 권장 선적월 = 그 3개월 전. 예상소요 0인 달은 제외'],
+    ['알람 레벨', '선행 커버(현 재고 ÷ 향후 월소요; 향후 데이터 없으면 재고회전) ≤ 1.5개월 긴급, ≤ 2.5 경고. 기말재고 음수 첫 달 = 소진 예상월, 권장 선적월 = 그 3개월 전. 당월·향후 소요 모두 0이면 제외'],
     ['미확정 물량', '향후 6개월 흐름에서 기말재고가 0 아래로 내려가는 누적분 (부족분은 그 달 구매로 메운다고 가정)'],
     ['VaR95', '1.645 × 일변동성(최근 60일 로그수익률 σ, 롤오버 ±8% 초과 제외) × √영업일(1개월 21, 3개월 63) × 기준가 × 미확정 물량'],
     ['기준가', 'FCPO 근월 + 제품 기본 프리미엄 (RSPO 25 / 관리팜유 RPO 40 / RSPO 65)'],
@@ -350,9 +350,19 @@ export function buildGlossary(wb = XLSX.utils.book_new()) {
 // ───────────── 대시보드 요약 ─────────────
 export async function buildDashboard(dashboard: any, wb = XLSX.utils.book_new()) {
   add(wb, '알람', sheetFromRows((dashboard.alerts ?? []).map((a: any) => ({ '제품': a.product, '레벨': a.alert_level, '메시지': a.message })), ['제품', '레벨', '메시지']));
-  add(wb, '재고 요약', sheetFromRows((dashboard.inventory_summary ?? []).map((x: any) => ({ '제품': x.product, '연월': `${x.year}-${x.month}`, '기말재고(kg)': x.ending_stock, '재고회전': x.coverage_days })), ['제품', '연월', '기말재고(kg)', '재고회전']));
+  add(wb, '재고 요약', sheetFromRows((dashboard.inventory_summary ?? []).map((x: any) => ({
+    '제품': x.product, '연월': `${x.year}-${x.month}`, '기말재고(kg)': x.ending_stock, '당월 예상소요(kg)': x.expected_usage,
+    '재고회전(당월)': x.coverage_days,
+    '선행 커버(개월)': x.coverage_forward_evaluable ? `${x.coverage_forward}${x.coverage_forward_capped ? '+' : ''}` : '-',
+    '다음 소요 개시월': x.usage_start_month ?? '-', '그 달 소요(kg)': x.next_usage ?? '-',
+  })), ['제품', '연월', '기말재고(kg)', '당월 예상소요(kg)', '재고회전(당월)', '선행 커버(개월)', '다음 소요 개시월', '그 달 소요(kg)']));
   add(wb, 'FCPO 최신', sheetFromRows((dashboard.fcpo_latest ?? []).map((f: any) => ({ '월물': f.contract_month, 'USD': f.settlement_usd, 'MYR': f.settlement_myr, '전일 MYR': f.prev_myr })), ['월물', 'USD', 'MYR', '전일 MYR']));
   add(wb, '박스권', sheetFromRows((dashboard.box_ranges ?? []).map((b: any) => ({ '월물': b.contract_month, '구간': b.zone, '현재가': b.current_price })), ['월물', '구간', '현재가']));
+  add(wb, '계산방식', methodSheet([
+    ['재고회전(당월)', '기말재고 ÷ 당월 예상소요 (엑셀 재고회전일과 동일)'],
+    ['선행 커버(개월)', '기말재고로 다음 달부터의 예상소요를 몇 개월 감당하는지 (통관 예정량 제외). "+" 는 데이터 범위 끝까지 재고가 남음(하한값). 소요가 달라지는 달(관리팜유 RPO 10월 투입 개시, 관리팜유 RSPO 10월 RPO/RSPO 구분 투입)에는 이 값이 실제 소진 기간'],
+    ...glossaryLines(['재고회전(개월)', '선행 커버(개월)', '구매 알람']),
+  ]));
   return wb;
 }
 

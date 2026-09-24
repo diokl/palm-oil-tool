@@ -132,6 +132,40 @@ export async function recalcInventory(
 // 기록은 /api/alerts 에서만, 그리고 활성 알람 내용이 바뀐 경우에만 한다.
 // (이전: 모든 호출마다 'UPDATE alerts SET is_active=0 WHERE 1=1' + INSERT → 동시 요청이 행 잠금 대기로 줄을 서서
 //  DB 커넥션이 전부 묶이는 장애가 있었음)
+// ── 선행 커버(개월) ──
+// 기준월 기말재고가 '그 다음 달부터'의 예상소요를 몇 개월 감당하는지 (분수 포함). 통관 예정량은 넣지 않는다 — 지금 재고만의 소진 기간.
+// 재고회전(기말재고 ÷ 당월 소요, 엑셀 재고회전일)은 소요가 달라지는 구간에서 실제 소진 기간과 어긋난다:
+//  · 관리팜유 RPO 10월 투입 개시 → 9월 소요 0 → 회전 0
+//  · 관리팜유 RSPO 10월부터 RPO/RSPO 구분 투입 → 소요 월 2,496톤 → 520톤, 9월 소요 기준 회전 0.6 이지만 실제는 3개월+
+// 그래서 대시보드 카드와 구매 알람은 이 값을 기준으로 한다. 소요 0인 달은 건너뛴다. rows 는 year, month 오름차순이어야 한다.
+export interface ForwardCoverage {
+  months: number;              // 소수 1자리
+  capped: boolean;             // 데이터 범위 끝까지 재고가 남음 → 실제 커버는 더 김 (하한값)
+  usage_start: string | null;  // 다음 소요 발생 월 'YYYY-MM' (없으면 null)
+  next_usage: number | null;   // 그 달의 예상소요(kg)
+  evaluable: boolean;          // 향후 소요 데이터가 있어 계산 가능한지
+}
+export function forwardCoverage(
+  rows: { year: number; month: number; expected_usage: number | null }[],
+  base: { year: number; month: number; ending_stock: number | null },
+): ForwardCoverage {
+  const baseIdx = base.year * 12 + base.month;
+  let stock = Number(base.ending_stock ?? 0);
+  let months = 0;
+  let usageStart: string | null = null;
+  let nextUsage: number | null = null;
+  let exhausted = false;
+  for (const r of rows) {
+    if (r.year * 12 + r.month <= baseIdx) continue;
+    const u = Number(r.expected_usage ?? 0);
+    if (u <= 0) continue;
+    if (!usageStart) { usageStart = `${r.year}-${String(r.month).padStart(2, '0')}`; nextUsage = u; }
+    if (stock >= u) { months += 1; stock -= u; }
+    else { months += stock / u; exhausted = true; break; }
+  }
+  return { months: Math.round(months * 10) / 10, capped: !exhausted, usage_start: usageStart, next_usage: nextUsage, evaluable: usageStart !== null };
+}
+
 export async function generateAlerts(persist = false): Promise<Alert[]> {
   const alerts: Alert[] = [];
 
@@ -152,21 +186,29 @@ export async function generateAlerts(persist = false): Promise<Alert[]> {
       // 향후 사용 예정 product 의 row 가 미리 생성되어 있을 뿐 실제 운영은 안 시작했으므로
       // 재고회전일 0 을 '구매 검토 필요' 로 오인해 경고를 띄우는 것을 방지.
       const usage = currentRow?.expected_usage ?? 0;
-      if (currentRow && usage > 0 && currentRow.coverage_days !== null && currentRow.coverage_days <= 2.5) {
+      // 판단 기준: 선행 커버(현 재고 ÷ 향후 월소요). 관리팜유 RSPO 처럼 10월부터 RPO/RSPO 구분 투입으로 소요가 급감하는 구간에서
+      // '기말재고 ÷ 당월 소요'(재고회전, 9월 기준 0.6)가 실제 소진 기간(3개월+)과 어긋나 잘못된 긴급 알림을 내는 것을 막는다.
+      // 데이터 범위 끝까지 재고가 남는(capped) 값은 하한값이므로 2.5 를 넘길 때만 채택하고, 아니면 재고회전으로 폴백.
+      const fwd = currentRow ? forwardCoverage(rows, currentRow) : null;
+      let months: number | null = null;
+      let basis = '';
+      if (fwd && fwd.evaluable && (!fwd.capped || fwd.months > 2.5)) { months = fwd.months; basis = '선행 커버'; }
+      else if (currentRow && usage > 0 && currentRow.coverage_days !== null) { months = currentRow.coverage_days; basis = '재고회전'; }
+      if (currentRow && months !== null && months <= 2.5) {
         alerts.push({
           product,
-          alert_level: currentRow.coverage_days <= 1.5 ? 'critical' : 'warning',
+          alert_level: months <= 1.5 ? 'critical' : 'warning',
           depletion_month: null,
           required_volume: null,
           recommended_shipment: null,
           current_price: null,
           box_range_zone: null,
-          message: `${product} 재고회전 ${currentRow.coverage_days}개월 -- 추가 구매 검토 필요`,
+          message: `${product} 재고 ${basis} ${months}개월${basis === '선행 커버' ? ' (향후 월소요 기준)' : ''} -- 추가 구매 검토 필요`,
           action_taken: null,
           is_active: true,
         });
-      } else if (currentRow && usage === 0) {
-        // 예상소요 0: 운영 시작 전(MANAGED 상반기) 또는 관리팜유 전환으로 소요 종료(RSPO 하반기) — 정보성 알림
+      } else if (currentRow && months === null) {
+        // 당월·향후 예상소요 모두 0: 운영 시작 전(MANAGED 상반기) 또는 관리팜유 전환으로 소요 종료(RSPO 하반기) — 정보성 알림
         alerts.push({
           product,
           alert_level: 'normal',
@@ -188,7 +230,7 @@ export async function generateAlerts(persist = false): Promise<Alert[]> {
           recommended_shipment: null,
           current_price: null,
           box_range_zone: null,
-          message: `${product} 재고 충분 -- 모니터링 유지`,
+          message: `${product} 재고 충분${basis === '선행 커버' && fwd ? ` (선행 커버 ${fwd.months}${fwd.capped ? '+' : ''}개월)` : ''} -- 모니터링 유지`,
           action_taken: null,
           is_active: true,
         });

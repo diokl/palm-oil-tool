@@ -58,7 +58,15 @@ interface InventorySummaryItem {
   month: number;
   ending_stock: number;
   coverage_days: number;
+  expected_usage?: number | null;
   upcoming?: { year: number; month: number; customs_total: number } | null;
+  // 선행 커버: 기말재고가 다음 달부터의 예상소요를 몇 개월 감당하는지 (API 에서 계산, lib/inventory-calc forwardCoverage)
+  coverage_forward?: number;
+  coverage_forward_capped?: boolean;
+  coverage_forward_evaluable?: boolean;
+  usage_start_month?: string | null;
+  next_usage?: number | null;
+  current_usage_zero?: boolean;
 }
 
 interface BoxRangeItem {
@@ -408,13 +416,13 @@ const AlertBanner = ({ alert, onAction, onDismiss }: { alert: DashboardAlert; on
   );
 };
 
-const MetricCard = ({ label, value, unit, accent }: { label: string; value: string; unit?: string; accent?: string }) => (
+const MetricCard = ({ label, value, unit, accent, hint }: { label: string; value: string; unit?: string; accent?: string; hint?: string }) => (
   <div className="card p-5 group">
     <p className="text-slate-500 text-xs font-medium tracking-wide uppercase">{label}</p>
     <div className="flex items-baseline gap-2 mt-2.5">
       <p className={`text-2xl font-bold tabular-nums ${accent || 'text-slate-900'}`}>{value}</p>
     </div>
-    {unit && <p className="text-xs text-slate-400 mt-1.5">{unit}</p>}
+    {unit && <p className="text-xs text-slate-400 mt-1.5" title={hint}>{unit}</p>}
   </div>
 );
 
@@ -933,20 +941,34 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
   const managed = data.inventory_summary?.find((x) => x.product === 'MANAGED');
   const managedRspo = data.inventory_summary?.find((x) => x.product === 'MANAGED_RSPO');
   const fmtStock = (kg: number | null | undefined) => kg == null ? '-' : `${(kg / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}톤`;
-  const stockUnit = (x: any) => {
+  const stockHint = '선행 커버 = 기말재고가 다음 달부터의 예상소요를 몇 개월 감당하는지 (통관 예정량 제외, "+" 는 데이터 범위 끝까지 재고가 남음). 회전 = 기말재고 ÷ 당월 예상소요 (엑셀 재고회전일과 동일). 소요가 달라지는 달에는 선행 커버가 실제 소진 기간에 가깝습니다.';
+  const mon = (ym: string) => String(Number(ym.slice(5)));
+  const stockUnit = (x: InventorySummaryItem | undefined) => {
     if (!x) return '';
+    const ym = `${x.year}-${String(x.month).padStart(2, '0')}`;
     // 현재 재고 0인데 임박 통관이 있으면(관리팜유 7월 7,500톤 등) 안내
     if ((x.ending_stock ?? 0) <= 0 && x.upcoming) {
       return `${x.upcoming.month}월 ${fmtStock(x.upcoming.customs_total)} 통관예정`;
     }
+    const fwd = x.coverage_forward_evaluable ? `선행 커버 ${x.coverage_forward}${x.coverage_forward_capped ? '+' : ''}개월` : null;
     // 당월 소요가 0(투입 전·전환 종료)이면 '회전 0개월' 대신 선행 커버로 표시
     if (x.current_usage_zero) {
-      if ((x.ending_stock ?? 0) > 0 && x.usage_start_month) {
-        return `${x.usage_start_month.slice(5)}월 투입 개시 · 선행 커버 ${x.coverage_forward}${x.coverage_forward_capped ? '+' : ''}개월`;
+      if ((x.ending_stock ?? 0) > 0 && fwd && x.usage_start_month) {
+        return `${mon(x.usage_start_month)}월 투입 개시 · ${fwd}`;
       }
-      return `${x.year}-${String(x.month).padStart(2, '0')} · 당월 소요 없음`;
+      return `${ym} · 당월 소요 없음`;
     }
-    return `${x.year}-${String(x.month).padStart(2, '0')} · 회전 ${x.coverage_days ?? '-'}개월`;
+    // 소요가 달라지는 구간(관리팜유 RSPO: 10월부터 RPO/RSPO 구분 투입으로 월 2,496톤 → 520톤)은
+    // '기말재고 ÷ 당월 소요'(회전 0.6)가 실제 소진 기간(3개월+)과 어긋나므로 선행 커버를 앞에 두고,
+    // 다음 달 소요가 당월 대비 ±20% 이상 바뀌면 그 기준(개시월 · 월 소요)을 함께 적는다.
+    if (fwd) {
+      const cur = x.expected_usage ?? 0;
+      const nxt = x.next_usage ?? 0;
+      const changed = cur > 0 && nxt > 0 && Math.abs(nxt - cur) / cur >= 0.2;
+      const note = changed && x.usage_start_month ? ` (${mon(x.usage_start_month)}월~ 월 ${fmtStock(nxt)} 소요)` : '';
+      return `${ym} · ${fwd}${note} · 회전 ${x.coverage_days ?? '-'}`;
+    }
+    return `${ym} · 회전 ${x.coverage_days ?? '-'}개월`;
   };
 
   return (
@@ -1012,10 +1034,10 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
           }`}>{selectedBoxRange?.zone || '-'}</p>
           <p className="text-[11px] text-slate-400 mt-1">{selectedBoxRange?.contract_month || ''} 기준</p>
         </div>
-        <MetricCard label="RBD 재고" value={fmtStock(rbd?.ending_stock)} unit={stockUnit(rbd)} />
-        <MetricCard label="RSPO 재고" value={fmtStock(rspo?.ending_stock)} unit={stockUnit(rspo)} />
-        <MetricCard label="관리팜유 RPO 재고" value={fmtStock(managed?.ending_stock)} unit={stockUnit(managed)} />
-        <MetricCard label="관리팜유 RSPO 재고" value={fmtStock(managedRspo?.ending_stock)} unit={stockUnit(managedRspo)} />
+        <MetricCard label="RBD 재고" value={fmtStock(rbd?.ending_stock)} unit={stockUnit(rbd)} hint={stockHint} />
+        <MetricCard label="RSPO 재고" value={fmtStock(rspo?.ending_stock)} unit={stockUnit(rspo)} hint={stockHint} />
+        <MetricCard label="관리팜유 RPO 재고" value={fmtStock(managed?.ending_stock)} unit={stockUnit(managed)} hint={stockHint} />
+        <MetricCard label="관리팜유 RSPO 재고" value={fmtStock(managedRspo?.ending_stock)} unit={stockUnit(managedRspo)} hint={stockHint} />
       </div>
 
       {/* 박스권 게이지 — 가로 전체폭 */}

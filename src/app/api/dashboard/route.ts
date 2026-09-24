@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { dbAll, dbGet } from '@/lib/db';
 
-import { generateAlerts } from '@/lib/inventory-calc';
+import { generateAlerts, forwardCoverage } from '@/lib/inventory-calc';
 import { calculateBoxRange } from '@/lib/box-range';
 import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effect';
 import { getOilSpread } from '@/lib/oil-spread';
@@ -73,7 +73,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
        WHERE product IN ('RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO')
          AND ending_stock IS NOT NULL
        ORDER BY product, year, month`
-    ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number; customs_volume: number }[];
+    ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number; customs_volume: number; expected_usage: number | null }[];
     const byProduct: Record<string, typeof invRows> = {};
     for (const r of invRows) (byProduct[r.product] ??= []).push(r);
     const inventorySummary = ['RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO'].map((prod) => {
@@ -93,26 +93,20 @@ async function buildDashboard(): Promise<Record<string, any>> {
           upcoming = { year: first.year, month: first.month, customs_total: customsTotal };
         }
       }
-      // 선행 커버(개월): 현재 기말재고가 다음 달부터의 예상소요를 몇 개월 감당하는지 (분수 포함).
-      // 현재월 소요가 0인 제품(관리팜유 RPO 10월 투입 개시 등)은 '기말재고 ÷ 당월 소요' 가 0 으로 나와 오해를 주므로 이 값을 함께 준다.
-      let stock = Number(pick.ending_stock ?? 0);
-      let coverageForward = 0;
-      let usageStart: string | null = null;
-      let exhausted = false;
-      for (const r of rows) {
-        if (r.year * 12 + r.month <= pick.year * 12 + pick.month) continue;
-        const u = Number((r as any).expected_usage ?? 0);
-        if (u <= 0) continue;
-        if (!usageStart) usageStart = `${r.year}-${String(r.month).padStart(2, '0')}`;
-        if (stock >= u) { coverageForward += 1; stock -= u; }
-        else { coverageForward += stock / u; exhausted = true; break; }
-      }
+      // 선행 커버(개월): 현재 기말재고가 다음 달부터의 예상소요를 몇 개월 감당하는지 (lib/inventory-calc forwardCoverage).
+      // '기말재고 ÷ 당월 소요'(재고회전)는 소요가 바뀌는 구간에서 실제 소진 기간과 어긋난다 —
+      //  · 관리팜유 RPO: 10월 투입 개시라 9월 소요 0 → 회전 0
+      //  · 관리팜유 RSPO: 10월부터 RPO/RSPO 구분 투입으로 소요 월 2,496톤 → 520톤, 9월 소요 기준 회전 0.6 이지만 실제는 3개월+
+      // 그래서 카드는 선행 커버를 앞에 두고 재고회전은 참고로 붙인다.
+      const fwd = forwardCoverage(rows, pick);
       return {
         ...pick, upcoming,
-        coverage_forward: Math.round(coverageForward * 10) / 10,
-        coverage_forward_capped: !exhausted, // 데이터 범위 끝까지 재고가 남음 (실제 커버는 더 김)
-        usage_start_month: usageStart,
-        current_usage_zero: Number((pick as any).expected_usage ?? 0) <= 0,
+        coverage_forward: fwd.months,
+        coverage_forward_capped: fwd.capped,       // 데이터 범위 끝까지 재고가 남음 (실제 커버는 더 김)
+        coverage_forward_evaluable: fwd.evaluable, // 향후 소요 데이터가 있어 계산 가능
+        usage_start_month: fwd.usage_start,
+        next_usage: fwd.next_usage,                // 다음 소요 발생 월의 예상소요(kg) — 소요 변화 표시용
+        current_usage_zero: Number(pick.expected_usage ?? 0) <= 0,
       };
     }).filter(Boolean);
 
