@@ -68,7 +68,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
     const now = new Date();
     const cutoff = now.getUTCFullYear() * 12 + (now.getUTCMonth() + 1); // 현재 year*12+month
     const invRows = await dbAll(
-      `SELECT product, year, month, ending_stock, coverage_days, customs_volume
+      `SELECT product, year, month, ending_stock, coverage_days, customs_volume, expected_usage
        FROM inventory
        WHERE product IN ('RBD', 'RSPO', 'MANAGED')
          AND ending_stock IS NOT NULL
@@ -93,7 +93,27 @@ async function buildDashboard(): Promise<Record<string, any>> {
           upcoming = { year: first.year, month: first.month, customs_total: customsTotal };
         }
       }
-      return { ...pick, upcoming };
+      // 선행 커버(개월): 현재 기말재고가 다음 달부터의 예상소요를 몇 개월 감당하는지 (분수 포함).
+      // 현재월 소요가 0인 제품(관리팜유 RPO 10월 투입 개시 등)은 '기말재고 ÷ 당월 소요' 가 0 으로 나와 오해를 주므로 이 값을 함께 준다.
+      let stock = Number(pick.ending_stock ?? 0);
+      let coverageForward = 0;
+      let usageStart: string | null = null;
+      let exhausted = false;
+      for (const r of rows) {
+        if (r.year * 12 + r.month <= pick.year * 12 + pick.month) continue;
+        const u = Number((r as any).expected_usage ?? 0);
+        if (u <= 0) continue;
+        if (!usageStart) usageStart = `${r.year}-${String(r.month).padStart(2, '0')}`;
+        if (stock >= u) { coverageForward += 1; stock -= u; }
+        else { coverageForward += stock / u; exhausted = true; break; }
+      }
+      return {
+        ...pick, upcoming,
+        coverage_forward: Math.round(coverageForward * 10) / 10,
+        coverage_forward_capped: !exhausted, // 데이터 범위 끝까지 재고가 남음 (실제 커버는 더 김)
+        usage_start_month: usageStart,
+        current_usage_zero: Number((pick as any).expected_usage ?? 0) <= 0,
+      };
     }).filter(Boolean);
 
     // Box range — 현재월 이후(활성) 월물만, 최대 8개.

@@ -939,6 +939,13 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
     if ((x.ending_stock ?? 0) <= 0 && x.upcoming) {
       return `${x.upcoming.month}월 ${fmtStock(x.upcoming.customs_total)} 통관예정`;
     }
+    // 당월 소요가 0(투입 전·전환 종료)이면 '회전 0개월' 대신 선행 커버로 표시
+    if (x.current_usage_zero) {
+      if ((x.ending_stock ?? 0) > 0 && x.usage_start_month) {
+        return `${x.usage_start_month.slice(5)}월 투입 개시 · 선행 커버 ${x.coverage_forward}${x.coverage_forward_capped ? '+' : ''}개월`;
+      }
+      return `${x.year}-${String(x.month).padStart(2, '0')} · 당월 소요 없음`;
+    }
     return `${x.year}-${String(x.month).padStart(2, '0')} · 회전 ${x.coverage_days ?? '-'}개월`;
   };
 
@@ -3418,9 +3425,10 @@ const InventoryTab = () => {
                       </div>
                     </td>
                     <td className={`px-5 py-3 tabular-nums font-semibold text-center ${
+                      (row.expected_usage ?? 0) <= 0 ? 'text-slate-300' :
                       (row.coverage_days ?? 0) < 1.5 ? 'text-rose-600' : (row.coverage_days ?? 0) < 2.5 ? 'text-amber-600' : 'text-emerald-600'
-                    }`}>
-                      {row.coverage_days != null ? row.coverage_days.toFixed(1) : '-'}
+                    }`} title={(row.expected_usage ?? 0) <= 0 ? '당월 예상소요 0 — 회전 계산 불가 (엑셀 표기 "-")' : '기말재고 ÷ 당월 예상소요'}>
+                      {(row.expected_usage ?? 0) <= 0 ? '-' : row.coverage_days != null ? row.coverage_days.toFixed(1) : '-'}
                     </td>
                     <td className="px-5 py-3">
                       {/* contract_price 는 텍스트 (예: '$1078.0/$1100.0', '1013.33 (wavg)') —
