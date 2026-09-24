@@ -70,7 +70,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
     const invRows = await dbAll(
       `SELECT product, year, month, ending_stock, coverage_days, customs_volume, expected_usage
        FROM inventory
-       WHERE product IN ('RBD', 'RSPO', 'MANAGED')
+       WHERE product IN ('RBD', 'RSPO', 'MANAGED', 'MANAGED_RSPO')
          AND ending_stock IS NOT NULL
        ORDER BY product, year, month`
     ) as { product: string; year: number; month: number; ending_stock: number; coverage_days: number; customs_volume: number }[];
