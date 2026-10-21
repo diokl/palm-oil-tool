@@ -27,6 +27,12 @@ export async function POST(request: NextRequest) {
       result.termsAgreed = true;
     }
 
+    // 약관 미동의면 세션을 주지 않는다 — 화면이 약관 팝업을 띄우고, 동의 시 agreeTerms:true 로 다시 로그인한다.
+    // (이전: 쿠키를 먼저 발급해 '거부합니다' 를 눌러도 새로고침하면 로그인 상태였음)
+    if (!result.termsAgreed) {
+      return NextResponse.json({ success: true, user: id, termsAgreed: false });
+    }
+
     const token = createSessionToken(id, result.role, result.canWrite);
 
     const response = NextResponse.json({

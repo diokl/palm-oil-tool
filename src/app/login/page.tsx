@@ -93,6 +93,12 @@ export default function LoginPage() {
     }
   };
 
+  // 로그인 후 이동할 경로 — 같은 사이트 내부 경로만 허용 (외부 URL·'//host' 로 보내는 오픈 리다이렉트 방지)
+  const safeFrom = () => {
+    const from = new URLSearchParams(window.location.search).get('from') || '/';
+    return from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/\\') ? from : '/';
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id || !password) {
@@ -123,9 +129,7 @@ export default function LoginPage() {
           return;
         }
         // Redirect
-        const params = new URLSearchParams(window.location.search);
-        const from = params.get('from') || '/';
-        router.push(from);
+        router.push(safeFrom());
         router.refresh();
       } else {
         setError(data.error || '로그인에 실패했습니다');
@@ -149,9 +153,7 @@ export default function LoginPage() {
       const data = await res.json();
       if (res.ok && data.success) {
         setShowTerms(false);
-        const params = new URLSearchParams(window.location.search);
-        const from = params.get('from') || '/';
-        router.push(from);
+        router.push(safeFrom());
         router.refresh();
       } else {
         setError(data.error || '로그인에 실패했습니다');

@@ -5262,17 +5262,25 @@ const SoybeanTab = () => {
   );
 };
 
-// KoreaPDS 원클릭 북마클릿. String.raw로 정규식 백슬래시(\d, \s, � 등) 보존.
-// 본인 로그인 브라우저 세션에서 목록의 각 기사를 same-origin fetch로 수집 → /api/news/ingest 로 전송.
-const NEWS_BOOKMARKLET = ('java' + 'script:') + String.raw`(async()=>{try{const I='https://palm-oil-tool.vercel.app/api/news/ingest?token=57b7cacfd147c09051db8ac66e26d2e037b3112e91fb6cc7';const dc=(location.search.match(/deal_cd=(\d+)/)||[])[1]||'';const CAT={'1446':'팜유','1103':'곡물'};const cat=CAT[dc]||'기타';const nz=s=>{const m=(s||'').match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);return m?m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2):'';};const seen=new Set();const rows=[];[...document.querySelectorAll('table tr')].forEach(tr=>{const a=tr.querySelector('a[href*="view"]');if(!a)return;const d=nz(tr.innerText);const t=(a.textContent||'').trim();if(!d||!t)return;const k=d+'|'+t;if(seen.has(k))return;seen.add(k);rows.push({date:d,title:t,url:a.href});});if(!rows.length){alert('뉴스 기사를 못 찾았습니다. KoreaPDS 일간 섹터별 시황 목록 페이지에서 실행하세요.');return;}const dec=b=>{let h=new TextDecoder('euc-kr').decode(b);if((h.match(/�/g)||[]).length>30){h=new TextDecoder('utf-8').decode(b);}return h;};const gb=(doc,ti,dt)=>{doc.querySelectorAll('script,style').forEach(e=>e.remove());const c=doc.querySelector('.board_describe_text');let bd='';if(c){bd=c.innerHTML.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();}if(!bd){let n=0;doc.querySelectorAll('td,div,p').forEach(el=>{const x=(el.textContent||'').replace(/\s+/g,' ').trim();if(x.length>n&&x.length<6000&&!/FusionCharts|getChartData|oncontextmenu/.test(x)){n=x.length;bd=x;}});}return (ti+'\n'+dt+'\n\n'+bd).trim();};const arts=[];for(const r of rows.slice(0,40)){try{const b=await(await fetch(r.url,{credentials:'include'})).arrayBuffer();const doc=new DOMParser().parseFromString(dec(b),'text/html');arts.push({date:r.date,title:r.title,content:gb(doc,r.title,r.date)});}catch(e){arts.push({date:r.date,title:r.title,content:''});}await new Promise(z=>setTimeout(z,120));}const res=await fetch(I,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat,articles:arts})});const j=await res.json();alert(res.ok?('['+cat+'] 완료\n신규 '+j.added+'건 / 갱신 '+(j.updated||0)+'건'):('실패: '+(j.error||res.status)));}catch(e){alert('오류: '+e.message);}})();`;
+// KoreaPDS 원클릭 북마클릿 — 코드는 /api/news/bookmarklet 에서 받는다 (인제스트 토큰을 클라이언트 번들에 두지 않기 위함).
 
 const BookmarkletInstall = () => {
   const ref = useRef<HTMLAnchorElement>(null);
   const [copied, setCopied] = useState(false);
+  const [code, setCode] = useState<string | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   // React가 javascript: href를 정화하지 않도록 ref로 직접 설정.
-  useEffect(() => { ref.current?.setAttribute('href', NEWS_BOOKMARKLET); }, []);
+  useEffect(() => {
+    fetch('/api/news/bookmarklet').then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.bookmarklet) { setLoadErr(j.error || '북마클릿을 불러오지 못했습니다'); return; }
+      setCode(j.bookmarklet);
+    }).catch(() => setLoadErr('북마클릿을 불러오지 못했습니다'));
+  }, []);
+  useEffect(() => { if (code) ref.current?.setAttribute('href', code); }, [code]);
   const copy = async () => {
-    try { await navigator.clipboard.writeText(NEWS_BOOKMARKLET); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
+    if (!code) return;
+    try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
   };
   return (
     <div className="card p-5 border-violet-100 bg-violet-50/30 space-y-3 animate-fade-in">
@@ -5282,6 +5290,7 @@ const BookmarkletInstall = () => {
         <li>KoreaPDS 로그인 → <b>일간 섹터별 시황</b> 목록(팜유 또는 곡물)에서 그 북마크 클릭</li>
         <li>페이지의 품목(팜유 1446 / 곡물 1103)을 <b>자동 인식해 카테고리별로 저장</b>. 각 기사 제목+본문 수집 (중복은 자동 스킵)</li>
       </ol>
+      {loadErr && <p className="text-xs text-rose-500">{loadErr}</p>}
       <div className="flex items-center gap-3 flex-wrap">
         <a
           ref={ref}

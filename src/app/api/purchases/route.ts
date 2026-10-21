@@ -5,6 +5,18 @@ import { syncCustomsVolumeForShipments, syncCustomsVolumeFromPurchases } from '@
 import { premiumOverride, specOf, productForSpec, defaultPremiums, premiumSum } from '@/lib/spec';
 import type { Product } from '@/lib/types';
 
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const isPositive = (v: unknown) => v !== null && v !== '' && Number.isFinite(Number(v)) && Number(v) > 0;
+
+// PUT 으로 바꿀 수 있는 컬럼. 요청 본문의 키 이름을 SQL 에 그대로 넣으면 SQL 인젝션이 되므로
+// (예: 키 "notes = (SELECT password_hash FROM users ...), x") 이 목록에 있는 키만 받는다.
+const UPDATABLE_COLUMNS = new Set([
+  'order_no', 'product', 'shipment_month', 'supplier', 'manufacturer', 'product_name',
+  'unit_price', 'qty_mt', 'amount_usd', 'incoterms', 'payment_terms', 'etd', 'contract_number', 'notes',
+  'market_price_usd', 'market_price_source', 'exchange_rate',
+  'spec', 'base_price', 'prem_3mcpd', 'prem_ge', 'prem_rspo',
+]);
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -354,6 +366,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!MONTH_RE.test(String(shipment_month))) {
+      return NextResponse.json({ error: `선적월 형식이 올바르지 않습니다 (YYYY-MM): ${shipment_month}` }, { status: 400 });
+    }
+    if (!isPositive(unit_price) || !isPositive(qty_mt)) {
+      return NextResponse.json({ error: '단가와 수량은 0보다 큰 숫자여야 합니다' }, { status: 400 });
+    }
+
     const finalAmountUsd = amount_usd ?? unit_price * qty_mt;
 
     await dbRun(
@@ -458,6 +477,18 @@ export async function PUT(request: NextRequest) {
       const merged = { prem_3mcpd: fields.prem_3mcpd ?? cur?.prem_3mcpd, prem_ge: fields.prem_ge ?? cur?.prem_ge, prem_rspo: fields.prem_rspo ?? cur?.prem_rspo };
       const price = fields.unit_price ?? cur?.unit_price;
       if (price != null && (merged.prem_3mcpd != null || merged.prem_ge != null || merged.prem_rspo != null)) fields.base_price = Number(price) - premiumSum(merged);
+    }
+    const unknown = Object.keys(fields).filter((k) => !UPDATABLE_COLUMNS.has(k));
+    if (unknown.length > 0) {
+      return NextResponse.json({ error: `수정할 수 없는 필드: ${unknown.join(', ')}` }, { status: 400 });
+    }
+    if ('shipment_month' in fields && !MONTH_RE.test(String(fields.shipment_month))) {
+      return NextResponse.json({ error: `선적월 형식이 올바르지 않습니다 (YYYY-MM): ${fields.shipment_month}` }, { status: 400 });
+    }
+    for (const k of ['unit_price', 'qty_mt'] as const) {
+      if (k in fields && !isPositive(fields[k])) {
+        return NextResponse.json({ error: '단가와 수량은 0보다 큰 숫자여야 합니다' }, { status: 400 });
+      }
     }
     const updateKeys = Object.keys(fields);
     if (updateKeys.length === 0) {
