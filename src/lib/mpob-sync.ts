@@ -27,12 +27,14 @@ export async function runMpobSync(opts: ScrapeOptions = {}): Promise<MpobSyncRes
   // 행을 JSON 한 덩어리로 넘겨 쿼리 1번에 upsert.
   // 행마다 INSERT 하면 함수(미국)↔DB(도쿄) 왕복 ~0.3s × 수백 건이 쌓여 60초 초과(504) —
   // 2026-10-21 실측: 100행 트랜잭션 1개에 30초, 4커넥션으로 700행 저장 중 타임아웃.
+  // 파라미터는 반드시 ?::text::jsonb — ?::jsonb 로 쓰면 postgres.js 가 서버가 알려준 jsonb 타입에 맞춰
+  // 문자열을 한 번 더 JSON.stringify 해 jsonb 문자열 스칼라가 됨 ("cannot call jsonb_to_recordset on a non-array").
   const ops: { sql: string; params: any[] }[] = [];
   for (let i = 0; i < rows.length; i += 1000) {
     ops.push({
       sql: `INSERT INTO mpob_data (category, item_name, year, month, value, value_rm, parent_group, sort_order)
             SELECT category, item_name, year, month, value, value_rm, parent_group, sort_order
-            FROM jsonb_to_recordset(?::jsonb) AS t(category text, item_name text, year int, month int,
+            FROM jsonb_to_recordset(?::text::jsonb) AS t(category text, item_name text, year int, month int,
                                                   value numeric, value_rm numeric, parent_group text, sort_order int)
             ON CONFLICT (category, item_name, year, month) DO UPDATE SET
               value = EXCLUDED.value,
