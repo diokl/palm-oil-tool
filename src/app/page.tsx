@@ -1057,6 +1057,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
                 <span className="w-2 h-2 bg-blue-500 rounded-full" />
                 AI 시황 분석
               </h3>
+              <div className="flex items-center gap-2">
               <button
                 onClick={handleAnalyze}
                 disabled={analyzing}
@@ -1065,6 +1066,15 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
                 {analyzing && <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>}
                 {analyzing ? '분석 중...' : '분석 실행'}
               </button>
+              {/* 이스터에그로 연 패널을 다시 숨김 — 다시 보려면 '대시보드' 글자 5번 클릭 + 비밀번호 */}
+              <button
+                onClick={() => { setShowAI(false); setAnalysisError(''); }}
+                title="AI 분석 패널 숨기기 — 다시 보려면 '대시보드' 글자를 5번 클릭하고 비밀번호를 입력하세요"
+                className="px-2.5 py-1.5 text-xs text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-slate-700 transition-colors"
+              >
+                숨기기
+              </button>
+              </div>
             </div>
 
             {analysisError && (

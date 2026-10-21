@@ -2,9 +2,28 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbGet, dbRun } from '@/lib/db';
 import { calculateBoxRange } from '@/lib/box-range';
 import Anthropic from '@anthropic-ai/sdk';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import { z } from 'zod';
 import { ANTHROPIC_MODEL } from '@/lib/anthropic';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // 모델 응답 20~50초 — Vercel Hobby 기본 10초로는 부족
+
+// 분석 결과 스키마 — 구조화 출력(output_config.format)으로 강제. UI 가 action 문자열로 색을 입히므로 enum.
+const AnalysisSchema = z.object({
+  market_summary: z.string().describe('현재 시장 상황 요약 (2-3문장)'),
+  buy_recommendation: z.string().describe('구매 관점 의견 (2-3문장)'),
+  monthly_strategy: z.array(z.object({
+    month: z.string().describe('월물 YYYY-MM'),
+    action: z.enum(['전량구매', '적극매수', '모니터링', '대기']).describe('현재 시장 상황과 재고를 고려한 구매 전략'),
+    target_price: z.number().describe('해당 월물의 매수 목표가 (USD/MT)'),
+    volume_mt: z.number().describe('권장 구매 물량 (톤) — 재고 소진 예상일 등 고려'),
+    reason: z.string().describe('그 전략을 추천하는 구체적 근거 (1-2문장)'),
+  })),
+  risk_factors: z.array(z.string()).describe('리스크 요인 2-4개'),
+  action_items: z.array(z.string()).describe('조치사항 2-4개'),
+  outlook: z.string().describe('단기/중기 전망 (1-2문장)'),
+});
 
 // 분석 대상 월물: FCPO DB 최신 거래일에 시세가 있는 월물 중 현재월 이후 가장 가까운 3개.
 // (이전에는 '2026-04/05/06' 고정이라 시간이 지나면 만기 월물을 분석하는 문제가 있었음)
@@ -65,12 +84,6 @@ export async function POST(request: NextRequest) {
       `SELECT * FROM alerts WHERE is_active = 1 ORDER BY alert_level`
     );
 
-    const strategyTemplate = months
-      .map((m, i) => i === 0
-        ? `    {"month": "${m}", "action": "전량구매/적극매수/모니터링/대기 중 하나", "target_price": 목표단가숫자, "volume_mt": 권장물량숫자, "reason": "이유 1문장"}`
-        : `    {"month": "${m}", "action": "...", "target_price": 숫자, "volume_mt": 숫자, "reason": "..."}`)
-      .join(',\n');
-
     const prompt = `당신은 삼양식품 원재료구매팀의 팜유 구매 전문 분석가입니다. 아래 데이터를 종합하여 현재 시장 상황과 구매 전략을 분석해주세요.
 기준일: ${latestDate} (FCPO 최신 거래일) / 분석 대상 월물: ${months.join(', ')}
 
@@ -96,23 +109,9 @@ ${boxRange ? JSON.stringify({
 ## 활성 알람
 ${JSON.stringify(alerts, null, 2)}
 
-다음 형식으로 분석 결과를 JSON으로 반환해주세요:
-{
-  "market_summary": "현재 시장 상황 요약 (2-3문장)",
-  "buy_recommendation": "구매 관점 의견 (2-3문장)",
-  "monthly_strategy": [
-${strategyTemplate}
-  ],
-  "risk_factors": ["리스크 요인 1", "리스크 요인 2"],
-  "action_items": ["조치사항 1", "조치사항 2"],
-  "outlook": "단기/중기 전망 (1-2문장)"
-}
-
-monthly_strategy의 각 월에 대해:
-- action: 현재 시장 상황과 재고를 고려한 구매 전략
-- target_price: 해당 월물의 매수 목표가 (USD/MT)
-- volume_mt: 권장 구매 물량 (재고 소진 예상일 등 고려)
-- reason: 그 전략을 추천하는 구체적 근거`;
+분석 결과는 지정된 JSON 스키마로 반환됩니다. monthly_strategy 는 ${months.join(', ')} 월물 각각 1건을 이 순서로 넣고,
+action 은 전량구매 / 적극매수 / 모니터링 / 대기 중 하나, target_price 는 USD/MT 숫자, volume_mt 는 톤 숫자로 적어주세요.
+risk_factors 와 action_items 는 2~4개씩, 모든 문장은 한국어로 작성합니다.`;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -143,19 +142,31 @@ monthly_strategy의 각 월에 대해:
       return NextResponse.json(mockResult);
     }
 
-    const client = new Anthropic({ apiKey });
-    const message = await client.messages.create({
+    // 구조화 출력으로 스키마에 맞는 JSON 만 받고 SDK 가 파싱(parsed_output)한다.
+    // (이전: max_tokens 1024 + 정규식 JSON 추출 → 한글 응답이 1,024 토큰에서 잘려
+    //  "Expected ',' or ']' after array element in JSON" 파싱 오류가 났음)
+    // effort low: 같은 스키마로 실측 22초 (medium 52초, thinking 없음 28초) — Vercel 60초 제한 안에서 안정적.
+    // 타임아웃 55초: Vercel maxDuration 60초 안에 오류를 돌려주기 위함.
+    const client = new Anthropic({ apiKey, timeout: 55_000, maxRetries: 1 });
+    const message = await client.messages.parse({
       model: ANTHROPIC_MODEL,
-      max_tokens: 1024,
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'low', format: zodOutputFormat(AnalysisSchema) },
       messages: [{ role: 'user', content: prompt }],
     });
-
-    const text = message.content[0].type === 'text' ? message.content[0].text : '';
-    // Extract JSON from response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { market_summary: text };
-    result.analysis_months = months;
-    result.as_of = latestDate;
+    if (message.stop_reason === 'max_tokens') {
+      return NextResponse.json({ error: '분석 응답이 길이 제한에서 잘렸습니다. 다시 실행해 주세요.' }, { status: 502 });
+    }
+    if (message.stop_reason === 'refusal') {
+      return NextResponse.json({ error: '모델이 이 요청에 대한 응답을 거부했습니다.' }, { status: 502 });
+    }
+    const parsed = message.parsed_output;
+    if (!parsed) {
+      const text = message.content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text ?? '';
+      return NextResponse.json({ error: `분석 응답을 해석하지 못했습니다: ${text.slice(0, 200)}` }, { status: 502 });
+    }
+    const result = { ...parsed, analysis_months: months, as_of: latestDate };
 
     await dbRun(
       `INSERT INTO analyses (analysis_type, input_data, result, model) VALUES ('market', ?, ?, ?)`,
@@ -163,7 +174,12 @@ monthly_strategy의 각 월에 대해:
     );
 
     return NextResponse.json(result);
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    // SDK 오류는 종류별 사용자용 메시지 (가장 구체적인 것부터; Timeout 은 APIError 의 하위이므로 먼저)
+    if (error instanceof Anthropic.AuthenticationError) return NextResponse.json({ error: 'ANTHROPIC_API_KEY 가 유효하지 않습니다.' }, { status: 500 });
+    if (error instanceof Anthropic.RateLimitError) return NextResponse.json({ error: 'API 요청 한도를 넘었습니다. 잠시 후 다시 실행해 주세요.' }, { status: 429 });
+    if (error instanceof Anthropic.APIConnectionTimeoutError) return NextResponse.json({ error: '모델 응답 시간이 초과됐습니다. 다시 실행해 주세요.' }, { status: 504 });
+    if (error instanceof Anthropic.APIError) return NextResponse.json({ error: `Anthropic API 오류 ${error.status ?? ''}: ${error.message}` }, { status: 502 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
