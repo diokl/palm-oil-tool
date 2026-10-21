@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
-export const maxDuration = 60; // PDF 텍스트 추출 + Claude 호출
+export const maxDuration = 60; // Claude 호출 (PDF 직접 판독)
 
-async function parsePdf(buffer: Buffer): Promise<string> {
-  const mod = await import('pdf-parse');
-  const pdfParse = (mod as any).default || mod;
-  const data = await pdfParse(buffer);
-  return data.text;
+// PDF 는 텍스트를 따로 뽑지 않고 document 블록으로 Claude 에 직접 보낸다 (다른 업로드 라우트와 동일).
+// (이전: pdf-parse 1.x 방식 `pdfParse(buffer)` 호출 — 설치된 2.x 는 PDFParse 클래스만 내보내
+//  'pdfParse is not a function' 으로 모든 검증이 500. 텍스트층이 없는 스캔본 B/L·인보이스도 빈 텍스트로 판정됐음)
+function isPdf(buffer: Buffer): boolean {
+  return buffer.subarray(0, 5).toString('latin1') === '%PDF-';
 }
 
 interface LCData {
@@ -46,9 +46,9 @@ export async function POST(request: NextRequest) {
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-
-    // Extract text from PDF
-    const documentText = await parsePdf(buffer);
+    if (!isPdf(buffer)) {
+      return NextResponse.json({ error: 'PDF 파일만 검증할 수 있습니다' }, { status: 400 });
+    }
 
     // Parse LC data
     let lcData: LCData = {};
@@ -90,12 +90,16 @@ export async function POST(request: NextRequest) {
           messages: [
             {
               role: 'user',
-              content: `You are a trade finance document verification expert. Analyze this shipping document and compare it against the LC conditions.
+              content: [
+                {
+                  type: 'document',
+                  source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') },
+                },
+                {
+                  type: 'text',
+                  text: `You are a trade finance document verification expert. Analyze the attached shipping document and compare it against the LC conditions.
 
 ${lcDescription}
-
-Document text:
-${documentText.substring(0, 30000)}
 
 Provide your response as JSON with this structure:
 {
@@ -125,6 +129,8 @@ Provide your response as JSON with this structure:
 }
 
 Return only valid JSON, no other text.`,
+                },
+              ],
             },
           ],
         });

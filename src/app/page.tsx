@@ -6040,7 +6040,9 @@ const AlertsTab = () => {
 
 const LCTab = () => {
   const [purchaseData, setPurchaseData] = useState<PurchaseItem[]>([]);
-  const [selectedPurchaseId, setSelectedPurchaseId] = useState<number | null>(null);
+  // <select> 값 그대로(문자열) 보관 — purchases.id 는 BIGSERIAL 이라 API 가 문자열 "123" 으로 준다
+  // (이전: parseInt 한 숫자와 문자열 id 를 === 비교해 항상 못 찾고 'LC 생성' 이 아무 반응 없이 끝남)
+  const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null);
   const [lcFields, setLcFields] = useState<Record<string, string> | null>(null);
   const [loading, setLoading] = useState(false);
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -6060,8 +6062,11 @@ const LCTab = () => {
 
   const handleGenerateLC = async () => {
     if (!selectedPurchaseId) return;
-    const purchase = purchaseData.find(p => p.id === selectedPurchaseId);
-    if (!purchase) return;
+    const purchase = purchaseData.find(p => String(p.id) === selectedPurchaseId);
+    if (!purchase) {
+      alert('선택한 구매 이력을 찾을 수 없습니다. 목록을 새로고침해 주세요.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -6081,12 +6086,17 @@ const LCTab = () => {
           discharge_port: null,
         }),
       });
+      if (!res.ok) {
+        await alertFail(res, 'LC 생성');
+        return;
+      }
       const json = await res.json();
       if (json.lc_fields) {
         setLcFields(json.lc_fields);
       }
     } catch (error) {
       console.error('Failed to generate LC:', error);
+      alert('LC 생성 실패: 서버에 연결할 수 없습니다');
     } finally {
       setLoading(false);
     }
@@ -6155,7 +6165,7 @@ const LCTab = () => {
           <label className="text-xs text-slate-500 mb-2 block font-medium">구매 이력 선택</label>
           <select
             value={selectedPurchaseId || ''}
-            onChange={(e) => { setSelectedPurchaseId(e.target.value ? parseInt(e.target.value) : null); setLcFields(null); }}
+            onChange={(e) => { setSelectedPurchaseId(e.target.value || null); setLcFields(null); }}
             className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
           >
             <option value="">-- 구매 이력을 선택하세요 --</option>

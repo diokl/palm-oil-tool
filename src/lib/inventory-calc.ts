@@ -2,6 +2,15 @@ import { dbAll, dbGet, dbRun, dbBatchRun } from './db';
 import type { InventoryRow, Alert, Product } from './types';
 import { kstNow } from './kst';
 
+// ── 재고 관리 시작 연도와 그 해 기초재고 ──
+// 재고표는 2025-01 부터 관리하며 2024 행은 DB 에 없다. 2025 기초재고(2024-12 말, kg)는 엑셀 수불표 값으로 고정.
+// (이전: seed 때 한 번만 인자로 넘기고 저장하지 않아, 2025 셀 수정·2024-12~2025-11 선적 구매 변경으로
+//  2025 를 재계산하면 전년 12월 행이 없어 기초재고 0 → 2025 전체와 2026 초 재고가 낮아지고 소진 알람 오발.
+//  또 2024 선적 구매 동기화가 2024 행을 만들면 그 통관 누계가 2025 기초재고로 들어가 재고가 부풀었다)
+// 관리팜유(MANAGED·MANAGED_RSPO)는 2026 투입 개시라 0.
+export const INVENTORY_START_YEAR = 2025;
+const START_YEAR_OPENING_STOCK_KG: Partial<Record<Product, number>> = { RBD: 2418776, RSPO: 1382975 };
+
 // ── purchases → inventory.customs_volume 자동 동기화 ──
 //
 // 선적월(shipment_month) + 1M = 통관월(customs month) 규칙으로 inventory.customs_volume에
@@ -26,6 +35,8 @@ export async function syncCustomsVolumeFromPurchases(
 ): Promise<void> {
   const customs = shipmentToCustomsMonth(shipmentMonth);
   if (!customs) return;
+  // 관리 시작 전(2024 통관) 구매는 재고표에 넣지 않는다 — 2025 기초재고에 이미 반영된 물량
+  if (customs.year < INVENTORY_START_YEAR) return;
 
   const row = await dbGet(
     `SELECT COALESCE(SUM(qty_mt), 0) AS total_qty
@@ -88,7 +99,10 @@ export async function recalcInventory(
 
   if (rows.length === 0) return rows;
 
-  if (prevYearEndingStock === undefined) {
+  if (year <= INVENTORY_START_YEAR) {
+    // 시작 연도는 넘겨받은 값·전년 행과 무관하게 고정 기초재고
+    prevYearEndingStock = START_YEAR_OPENING_STOCK_KG[product] ?? 0;
+  } else if (prevYearEndingStock === undefined) {
     const prev = await dbGet(
       `SELECT ending_stock FROM inventory WHERE product = ? AND year = ? AND month = 12`,
       [product, year - 1]

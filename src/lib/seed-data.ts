@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { dbBatchRun, dbGet, dbRun, dbAll } from './db';
 import { recalcInventory } from './inventory-calc';
+import type { Product } from './types';
 
 interface PriceRecord {
   date: string;
@@ -164,15 +165,8 @@ export async function seedInitialData() {
 
     if (combinations && combinations.length > 0) {
       for (const combo of combinations) {
-        const product = combo.product as 'RBD' | 'RSPO' | 'MANAGED';
-        // For 2025 data, use assumed starting stock values
-        if (product === 'RBD' && combo.year === 2025) {
-          await recalcInventory(product, combo.year, 2418776);
-        } else if (product === 'RSPO' && combo.year === 2025) {
-          await recalcInventory(product, combo.year, 1382975);
-        } else {
-          await recalcInventory(product, combo.year);
-        }
+        // 2025 기초재고는 recalcInventory 가 INVENTORY_START_YEAR 고정값으로 적용
+        await recalcInventory(combo.product as Product, combo.year);
       }
     }
 
