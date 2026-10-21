@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun } from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
 // 북마클릿(KoreaPDS 등 본인 로그인 세션)에서 수집한 기사들을 받아 중복을 거르고 저장.
 // - 인증: 토큰(?token= 또는 x-ingest-token 헤더) === NEWS_INGEST_TOKEN
@@ -39,7 +39,8 @@ async function analyzeSentiment(text: string): Promise<{ sentiment: string; impa
     const client = new Anthropic({ apiKey });
     const res = await client.messages.create({
       model: ANTHROPIC_MODEL,
-      max_tokens: 200,
+      max_tokens: 2000, // thinking 포함 한도 (200 이면 thinking 에 다 쓰여 답이 비어 '보합' 으로 떨어짐)
+      output_config: LOW_EFFORT,
       messages: [{
         role: 'user',
         content: `당신은 팜유 시장 전문 분석가입니다. 다음 뉴스의 팜유 가격 전망과 영향도를 판단하세요.
@@ -50,7 +51,7 @@ async function analyzeSentiment(text: string): Promise<{ sentiment: string; impa
 {"sentiment": "강세 또는 약세 또는 보합", "impact": "High 또는 Medium 또는 Low"}`,
       }],
     });
-    const t = res.content[0].type === 'text' ? res.content[0].text : '';
+    const t = responseText(res);
     const j = t.match(/\{[\s\S]*\}/);
     if (j) {
       const p = JSON.parse(j[0]);

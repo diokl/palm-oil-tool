@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun } from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
 /**
  * POST /api/inventory/upload-contracts
@@ -43,7 +43,8 @@ export async function POST(request: NextRequest) {
 
     const response = await client.messages.create({
       model: ANTHROPIC_MODEL,
-      max_tokens: 4096,
+      max_tokens: 16000, // thinking 포함 한도 (계약 행이 많으면 JSON 이 길다)
+      output_config: LOW_EFFORT,
       messages: [{
         role: 'user',
         content: [
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
       }],
     });
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    const text = responseText(response);
 
     // Parse JSON from response
     let contracts: any[];

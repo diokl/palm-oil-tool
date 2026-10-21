@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { specFromFlags, productForSpec, defaultPremiums } from '@/lib/spec';
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
 // Extract SC fields from PDF text using pattern matching
 function extractSCFields(text: string): Record<string, any> {
@@ -136,7 +136,8 @@ export async function POST(request: NextRequest) {
 
     const message = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
-      max_tokens: 2000,
+      max_tokens: 16000, // thinking 포함 한도
+      output_config: LOW_EFFORT,
       messages: [
         {
           role: 'user',
@@ -180,19 +181,16 @@ Use null for fields you cannot extract. Return ONLY valid JSON, no markdown.`,
     });
 
     // Claude 응답에서 JSON 추출
-    const responseText = message.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
+    const text = responseText(message);
 
     let extracted: Record<string, any> = {};
     try {
-      let jsonStr = responseText;
-      const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      let jsonStr = text;
+      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (jsonMatch) {
         jsonStr = jsonMatch[1].trim();
       } else {
-        const objMatch = responseText.match(/\{[\s\S]*\}/);
+        const objMatch = text.match(/\{[\s\S]*\}/);
         if (objMatch) {
           jsonStr = objMatch[0];
         }

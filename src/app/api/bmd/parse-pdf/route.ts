@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
 interface ParsedBMDRow {
   month: string;
@@ -158,7 +158,8 @@ async function callClaude(
 ): Promise<string> {
   const message = await anthropic.messages.create({
     model: ANTHROPIC_MODEL,
-    max_tokens: 4096,
+    max_tokens: 16000, // thinking 포함 한도
+    output_config: LOW_EFFORT,
     messages: [
       {
         role: 'user',
@@ -172,10 +173,7 @@ async function callClaude(
       },
     ],
   });
-  return message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-    .map((block) => block.text)
-    .join('');
+  return responseText(message);
 }
 
 // Claude 응답 텍스트에서 JSON 추출
@@ -241,7 +239,7 @@ export async function POST(request: NextRequest) {
       exchange_rate: parsed.exchange_rate,
       rbd_palm_oil: expanded,
       warnings: warnings.length > 0 ? warnings : undefined,
-      raw_text: `[Claude API로 추출] 파일: ${file.name}, 모델: ANTHROPIC_MODEL`,
+      raw_text: `[Claude API로 추출] 파일: ${file.name}, 모델: ${ANTHROPIC_MODEL}`,
     });
   } catch (error: any) {
     console.error('BMD PDF parse error:', error);

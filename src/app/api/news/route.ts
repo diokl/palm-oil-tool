@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
 // Ensure full_content column exists (migration-safe).
 // No-op under PostgreSQL/Supabase: schema is managed out-of-band via schema.sql.
@@ -20,7 +20,8 @@ async function analyzeNewsWithAI(content: string): Promise<{ sentiment: string; 
 
     const response = await client.messages.create({
       model: ANTHROPIC_MODEL,
-      max_tokens: 200,
+      max_tokens: 2000, // thinking 포함 한도 (200 이면 thinking 에 다 쓰여 답이 비어 '보합' 으로 떨어짐)
+      output_config: LOW_EFFORT,
       messages: [{
         role: 'user',
         content: `당신은 팜유 시장 전문 분석가입니다. 다음 뉴스의 팜유 가격에 대한 시황 전망과 영향도를 판단해주세요.
@@ -36,7 +37,7 @@ async function analyzeNewsWithAI(content: string): Promise<{ sentiment: string; 
       }],
     });
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    const text = responseText(response);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
@@ -108,6 +109,7 @@ async function parseBulkNewsWithAI(rawText: string): Promise<Array<{
   const response = await client.messages.create({
     model: ANTHROPIC_MODEL,
     max_tokens: 16384,
+    output_config: LOW_EFFORT,
     messages: [{
       role: 'user',
       content: `당신은 팜유/유지류 시황 뉴스 전문 파서입니다.
@@ -143,7 +145,7 @@ ${rawText}
     }],
   });
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const text = responseText(response);
   const stopReason = response.stop_reason;
 
   // 응답이 max_tokens로 잘렸는지 확인

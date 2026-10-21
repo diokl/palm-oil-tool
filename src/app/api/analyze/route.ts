@@ -4,10 +4,10 @@ import { calculateBoxRange } from '@/lib/box-range';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT } from '@/lib/anthropic';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // 모델 응답 20~50초 — Vercel Hobby 기본 10초로는 부족
+export const maxDuration = 60; // 모델 응답 10~15초(Sonnet 5.5, effort low) — 여유를 두고 60초
 
 // 분석 결과 스키마 — 구조화 출력(output_config.format)으로 강제. UI 가 action 문자열로 색을 입히므로 enum.
 const AnalysisSchema = z.object({
@@ -145,14 +145,14 @@ risk_factors 와 action_items 는 2~4개씩, 모든 문장은 한국어로 작�
     // 구조화 출력으로 스키마에 맞는 JSON 만 받고 SDK 가 파싱(parsed_output)한다.
     // (이전: max_tokens 1024 + 정규식 JSON 추출 → 한글 응답이 1,024 토큰에서 잘려
     //  "Expected ',' or ']' after array element in JSON" 파싱 오류가 났음)
-    // effort low: 같은 스키마로 실측 22초 (medium 52초, thinking 없음 28초) — Vercel 60초 제한 안에서 안정적.
+    // effort low: 같은 스키마로 실측 Sonnet 5.5 10~14초 (이전 Sonnet 4.6: low 22초, medium 52초).
     // 타임아웃 55초: Vercel maxDuration 60초 안에 오류를 돌려주기 위함.
     const client = new Anthropic({ apiKey, timeout: 55_000, maxRetries: 1 });
     const message = await client.messages.parse({
       model: ANTHROPIC_MODEL,
       max_tokens: 16000,
       thinking: { type: 'adaptive' },
-      output_config: { effort: 'low', format: zodOutputFormat(AnalysisSchema) },
+      output_config: { ...LOW_EFFORT, format: zodOutputFormat(AnalysisSchema) },
       messages: [{ role: 'user', content: prompt }],
     });
     if (message.stop_reason === 'max_tokens') {

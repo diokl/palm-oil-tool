@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ANTHROPIC_MODEL } from '@/lib/anthropic';
+import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
 async function parsePdf(buffer: Buffer): Promise<string> {
   const mod = await import('pdf-parse');
@@ -79,7 +79,8 @@ export async function POST(request: NextRequest) {
 
         const response = await client.messages.create({
           model: ANTHROPIC_MODEL,
-          max_tokens: 2000,
+          max_tokens: 16000, // thinking 포함 한도
+          output_config: LOW_EFFORT,
           messages: [
             {
               role: 'user',
@@ -123,7 +124,7 @@ Return only valid JSON, no other text.`,
         });
 
         try {
-          const claudeText = response.content[0].type === 'text' ? response.content[0].text : '';
+          const claudeText = responseText(response);
           const jsonMatch = claudeText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
