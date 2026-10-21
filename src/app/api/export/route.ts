@@ -10,10 +10,17 @@ import { GET as dashboardGET } from '../dashboard/route';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+// 내부 라우트 응답을 JSON 으로 — 오류 응답이면 예외 (이전: 500 응답 본문으로 빈 워크북을 만들어 200 으로 내려줌)
+async function okJson(res: Response, what: string): Promise<any> {
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || j?.error) throw new Error(`${what} 데이터 조회 실패: ${j?.error ?? res.status}`);
+  return j;
+}
+
 async function build(target: string): Promise<XLSX.WorkBook> {
   const wb = XLSX.utils.book_new();
   switch (target) {
-    case 'prebuy': { const j = await (await purchasesGET(new NextRequest('http://local/api/purchases?view=prebuy'))).json(); return buildPrebuy(j, wb); }
+    case 'prebuy': { const j = await okJson(await purchasesGET(new NextRequest('http://local/api/purchases?view=prebuy')), '선구매 효과'); return buildPrebuy(j, wb); }
     case 'purchases': return buildPurchases(wb);
     case 'inventory': return buildInventory(wb);
     case 'fcpo': return buildFcpo(wb);
@@ -24,7 +31,7 @@ async function build(target: string): Promise<XLSX.WorkBook> {
     case 'alerts': return buildAlerts(wb);
     case 'news': return buildNews(wb);
     case 'glossary': return buildGlossary(wb);
-    case 'dashboard': { const j = await (await dashboardGET()).json(); return buildDashboard(j, wb); }
+    case 'dashboard': { const j = await okJson(await dashboardGET(), '대시보드'); return buildDashboard(j, wb); }
     default: throw new Error(`unknown target: ${target}`);
   }
 }

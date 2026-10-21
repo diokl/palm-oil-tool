@@ -3,6 +3,8 @@ import { dbAll, dbRun } from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
+export const maxDuration = 60; // PDF + Claude 호출 (기본 제한시간으로는 부족할 수 있음)
+
 /**
  * POST /api/inventory/upload-contracts
  *

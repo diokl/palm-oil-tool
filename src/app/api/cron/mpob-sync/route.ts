@@ -30,18 +30,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   const startedAt = new Date().toISOString();
-  try {
-    const result = await runMpobSync();
-    console.log(`[cron mpob-sync] ${startedAt} ok: ${result.message}`);
-    // USDA PSD 도 같은 월간 주기로 (키가 있을 때만, 실패해도 MPOB 결과는 유지)
-    let usda: any = null;
-    if (usdaKeyConfigured()) {
-      try { usda = await runUsdaSync(); console.log(`[cron mpob-sync] usda: ${usda.message}`); }
-      catch (e: any) { usda = { error: e.message }; console.warn(`[cron mpob-sync] usda failed: ${e.message}`); }
-    }
-    return NextResponse.json({ success: true, started_at: startedAt, ...result, usda });
-  } catch (error: any) {
-    console.error(`[cron mpob-sync] ${startedAt} failed: ${error.message}`);
-    return NextResponse.json({ success: false, started_at: startedAt, error: error.message }, { status: 500 });
+  // MPOB 와 USDA PSD(같은 월간 주기, 키가 있을 때만)를 동시에 실행 — 서로의 실패·소요시간에 영향받지 않게.
+  // (이전: MPOB 가 끝난 뒤 USDA 를 순서대로 → MPOB 가 실패하면 USDA 미실행, 성공해도 60초 안에 못 끝나 저장 0건)
+  const [mpobRes, usdaRes] = await Promise.allSettled([
+    runMpobSync(),
+    usdaKeyConfigured() ? runUsdaSync() : Promise.resolve(null),
+  ]);
+  const usda = usdaRes.status === 'fulfilled' ? usdaRes.value : { error: (usdaRes.reason as Error)?.message };
+  if (usda) console.log(`[cron mpob-sync] usda: ${'message' in usda ? usda.message : `failed: ${usda.error}`}`);
+  if (mpobRes.status === 'rejected') {
+    const msg = (mpobRes.reason as Error)?.message;
+    console.error(`[cron mpob-sync] ${startedAt} failed: ${msg}`);
+    return NextResponse.json({ success: false, started_at: startedAt, error: msg, usda }, { status: 500 });
   }
+  console.log(`[cron mpob-sync] ${startedAt} ok: ${mpobRes.value.message}`);
+  return NextResponse.json({ success: true, started_at: startedAt, ...mpobRes.value, usda });
 }

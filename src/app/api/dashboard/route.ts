@@ -7,6 +7,7 @@ import { calculatePrebuyEffect, DEFAULT_EXCHANGE_RATE } from '@/lib/prebuy-effec
 import { getOilSpread } from '@/lib/oil-spread';
 import { getSupplyDemand } from '@/lib/supply-demand';
 import { premiumOverride } from '@/lib/spec';
+import { kstNow } from '@/lib/kst';
 import type { Product } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -65,8 +66,8 @@ async function buildDashboard(): Promise<Record<string, any>> {
     // Inventory summary — 재고관리 탭의 각 제품 최신 기말재고(KG)를 그대로 반영.
     // 고정 월 대신: 각 제품별로 '현재월 이하에서 기말재고가 있는 최신 월'을 선택.
     // (MANAGED는 7월 통관 시작이라 현재월 이하 데이터가 없으면 최초 운영월로 폴백)
-    const now = new Date();
-    const cutoff = now.getUTCFullYear() * 12 + (now.getUTCMonth() + 1); // 현재 year*12+month
+    const kst = kstNow(); // 한국 시간 기준 (서버 UTC — 월초 00~09시에 지난달로 계산되던 문제)
+    const cutoff = kst.year * 12 + kst.month; // 현재 year*12+month
     const invRows = await dbAll(
       `SELECT product, year, month, ending_stock, coverage_days, customs_volume, expected_usage
        FROM inventory
@@ -112,7 +113,7 @@ async function buildDashboard(): Promise<Record<string, any>> {
 
     // Box range — 현재월 이후(활성) 월물만, 최대 8개.
     // (이전: 2020년부터 데이터 10개 이상인 모든 월물 70여 개를 동시에 계산 → 커넥션 풀 고갈·504 원인)
-    const curYm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    const curYm = kst.ym;
     const activeMonths = await dbAll(
       `SELECT contract_month, COUNT(*) as cnt
        FROM fcpo_settlement
@@ -174,9 +175,10 @@ async function buildDashboard(): Promise<Record<string, any>> {
       mpobSummary = await dbAll(
         `SELECT category, item_name, year, month, value, value_rm
          FROM mpob_data
-         WHERE year IN (2024, 2025, 2026)
+         WHERE year BETWEEN ? AND ?
            AND item_name IN ('RBD PALM OIL', 'RBD PALM OLEIN', 'RBD PALM STEARIN', 'PFAD', 'MALAYSIA', 'TOTAL', 'TOTAL PALM OIL', 'PALM OIL')
-         ORDER BY category, item_name, year, month`
+         ORDER BY category, item_name, year, month`,
+        [kst.year - 2, kst.year], // 최근 3개년 (이전: 2024~2026 고정이라 2027년 데이터가 빠짐)
       );
     } catch (e: any) {
       console.warn('MPOB summary skipped:', e.message);

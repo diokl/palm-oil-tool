@@ -1,4 +1,5 @@
 import { dbAll } from './db';
+import { kstNow } from './kst';
 
 // ── 구매 시황가 자동 매칭 ──
 //
@@ -67,7 +68,7 @@ async function loadQuotes(months: string[]): Promise<Map<string, Row[]>> {
 }
 
 export function todayYm(now = new Date()): string {
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return kstNow(now).ym; // 한국 시간 기준 (서버 UTC — 월초 오전에 지난달로 계산되던 문제)
 }
 
 export async function suggestMarketPrices(months: string[], now = new Date()): Promise<MarketPriceSuggestion[]> {

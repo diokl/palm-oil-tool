@@ -1,4 +1,5 @@
 import { dbAll } from './db';
+import { kstNow } from './kst';
 
 // ── 리스크 정량화: 미확정 물량 노출 · 가격 VaR · 계획단가 추적 ──
 //
@@ -47,8 +48,7 @@ export interface RiskResult {
 const ymOf = (y: number, m: number) => `${y}-${String(m).padStart(2, '0')}`;
 
 export async function getExposureRisk(horizon = 6): Promise<RiskResult> {
-  const now = new Date();
-  const curY = now.getFullYear(), curM = now.getMonth() + 1;
+  const { year: curY, month: curM } = kstNow(); // 한국 시간 기준 (서버 UTC)
 
   // ── 가격·변동성 ──
   const px = await dbAll(
@@ -120,7 +120,9 @@ export async function getExposureRisk(horizon = 6): Promise<RiskResult> {
       const usage = Number(r?.expected_usage ?? 0), customs = Number(r?.customs_volume ?? 0), sales = Number(r?.sales_volume ?? 0);
       const actual = r?.actual_ending_stock;
       const ending = actual != null ? Number(actual) : stock + customs - usage - sales;
-      const shortfall = ending < 0 ? -ending - cumShort : 0; // 이번 달에 새로 필요한 만큼 (누적 부족 증가분)
+      // 이번 달에 새로 필요한 만큼. 부족분은 구매로 메웠다고 보고 다음 달은 재고 0 에서 시작하므로
+      // ending 은 이미 '이번 달 부족분' 이다. (이전: 누적 부족분을 한 번 더 빼서 매달 1,000톤 부족이면 6개월 합이 1,000톤으로 과소 계산)
+      const shortfall = ending < 0 ? -ending : 0;
       if (shortfall > 0) { cumShort += shortfall; if (!firstShort) firstShort = ym; }
       if (monthsCovered == null && ending < 0) monthsCovered = i;
       flow.push({ ym, usage, customs, ending, shortfall: Math.max(0, shortfall) });

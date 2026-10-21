@@ -11,6 +11,7 @@ import { getUsdaTable } from './usda-psd';
 import { GLOSSARY } from './glossary';
 import { SPEC_LABEL, specOf, PRODUCT_LABEL } from './spec';
 import { PRODUCT_PREMIUM_USD } from './prebuy-effect';
+import { kstNow, kstYmd } from './kst';
 
 // ── 탭별 엑셀 내보내기 ──
 // 각 워크북 = 데이터 시트(들) + '계산방식' 시트. 계산이 있는 표(선구매 효과, 재고관리)는 값이 아니라 엑셀 수식으로 넣어
@@ -109,7 +110,7 @@ export async function buildPurchases(wb = XLSX.utils.book_new()) {
   const ws = sheetFromRows(rows.map(p => ({
     'ID': p.id, 'Order No': p.order_no, '스펙': SPEC_LABEL[specOf(p) as keyof typeof SPEC_LABEL] ?? p.spec, '제품': PRODUCT_LABEL[p.product as keyof typeof PRODUCT_LABEL] ?? p.product, '선적월': p.shipment_month, '공급사': p.supplier, '제조사': p.manufacturer, '품명': p.product_name,
     '단가($/MT)': num(p.unit_price), '수량(MT)': num(p.qty_mt), '3-MCPD': p.prem_3mcpd ?? 0, 'GE': p.prem_ge ?? 0, 'RSPO': p.prem_rspo ?? 0,
-    'RBD 시황가': num(p.market_price_usd), '시황가 출처': p.market_price_source, '환율': num(p.exchange_rate), 'Incoterms': p.incoterms, '결제조건': p.payment_terms, 'ETD': p.etd, '계약번호': p.contract_number, '비고': p.notes, '등록일': p.created_at ? String(p.created_at).slice(0, 10) : null,
+    'RBD 시황가': num(p.market_price_usd), '시황가 출처': p.market_price_source, '환율': num(p.exchange_rate), 'Incoterms': p.incoterms, '결제조건': p.payment_terms, 'ETD': p.etd, '계약번호': p.contract_number, '비고': p.notes, '등록일': kstYmd(p.created_at),
   })), H, { '금액(USD)': r => `I${r}*J${r}`, '프리미엄 합': r => `L${r}+M${r}+N${r}`, 'Base(RBD환산)': r => `I${r}-O${r}` });
   add(wb, '구매이력', ws);
   add(wb, '계산방식', methodSheet([
@@ -135,7 +136,7 @@ export async function buildInventory(wb = XLSX.utils.book_new()) {
       ['전년 12월 기말(기초재고)', opening, '', '실재고 반영값이 있는 달은 계산값 대신 그 값을 채택하고 다음 달부터 이어 계산'],
       ['월', '예상소요량', '통관수량', '판매량', '실재고 반영값', '기말재고', '재고회전(개월)', '계약단가', '계약월', '수정자', '수정일'],
     ];
-    rs.forEach(r => aoa.push([Number(r.month), num(r.expected_usage), num(r.customs_volume), num(r.sales_volume) ?? 0, num(r.actual_ending_stock), null, null, r.contract_price, r.contract_date, r.updated_by, r.updated_at ? String(r.updated_at).slice(0, 10) : null]));
+    rs.forEach(r => aoa.push([Number(r.month), num(r.expected_usage), num(r.customs_volume), num(r.sales_volume) ?? 0, num(r.actual_ending_stock), null, null, r.contract_price, r.contract_date, r.updated_by, kstYmd(r.updated_at)]));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     rs.forEach((_, i) => {
       const r = i + 4; const prevRef = i === 0 ? 'B2' : `F${r - 1}`;
@@ -184,7 +185,7 @@ export async function buildFcpo(wb = XLSX.utils.book_new()) {
 
 // ───────────── 박스권 ─────────────
 export async function buildBoxRange(wb = XLSX.utils.book_new()) {
-  const now = new Date(); const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const curYm = kstNow().ym; // 한국 시간 기준 (서버 UTC)
   const months = await dbAll(`SELECT contract_month FROM fcpo_settlement WHERE settlement_usd IS NOT NULL AND contract_month >= ? GROUP BY contract_month HAVING COUNT(*) >= 10 ORDER BY contract_month LIMIT 8`, [curYm]) as { contract_month: string }[];
   const summary: Row[] = [];
   for (const { contract_month } of months) {
@@ -268,7 +269,9 @@ export async function buildMacro(wb = XLSX.utils.book_new()) {
   dates.forEach((d, i) => {
     const r = i + 2; const pv = palm.get(d);
     if (pv != null) ws[`${col(ci('팜유(FCPO 근월 USD)'))}${r}`] = { t: 'n', v: pv };
-    const B = col(ci('BRENT')), H = col(ci('HEATING_OIL')), C = col(ci('USDCNY')), D = col(ci('DCE_PALM')), P = col(ci('팜유(FCPO 근월 USD)'));
+    // 열 문자는 해당 시계열이 있을 때만 계산 (없는 시계열은 ci() = -1 → encode_col(-1) 이 예외를 던져 내보내기 전체가 500)
+    const colOf = (name: string) => (ci(name) >= 0 ? col(ci(name)) : '');
+    const B = colOf('BRENT'), H = colOf('HEATING_OIL'), C = colOf('USDCNY'), D = colOf('DCE_PALM'), P = col(ci('팜유(FCPO 근월 USD)'));
     if (ci('BRENT') >= 0) ws[`${col(ci('Brent(USD/MT)'))}${r}`] = { t: 'n', v: 0, f: `IF(${B}${r}="","",${B}${r}*7.33)` };
     if (ci('HEATING_OIL') >= 0) ws[`${col(ci('경유(USD/MT)'))}${r}`] = { t: 'n', v: 0, f: `IF(${H}${r}="","",${H}${r}*315)` };
     ws[`${col(ci('POGO(팜유−경유)'))}${r}`] = { t: 'n', v: 0, f: `IF(OR(${P}${r}="",${col(ci('경유(USD/MT)'))}${r}=""),"",${P}${r}-${col(ci('경유(USD/MT)'))}${r})` };

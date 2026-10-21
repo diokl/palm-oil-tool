@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import { ANTHROPIC_MODEL, LOW_EFFORT } from '@/lib/anthropic';
+import { kstNow } from '@/lib/kst';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // 모델 응답 10~15초(Sonnet 5.5, effort low) — 여유를 두고 60초
@@ -30,7 +31,7 @@ const AnalysisSchema = z.object({
 async function resolveTargetMonths(now = new Date()): Promise<{ latestDate: string | null; months: string[] }> {
   const latest = await dbGet(`SELECT date::text AS date FROM fcpo_settlement ORDER BY date DESC LIMIT 1`) as { date: string } | undefined;
   if (!latest) return { latestDate: null, months: [] };
-  const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const curYm = kstNow(now).ym; // 한국 시간 기준
   const rows = await dbAll(
     `SELECT DISTINCT contract_month FROM fcpo_settlement
      WHERE date = ? AND contract_month >= ? AND settlement_usd IS NOT NULL
@@ -52,7 +53,7 @@ async function resolveTargetMonths(now = new Date()): Promise<{ latestDate: stri
 export async function POST(request: NextRequest) {
   try {
     const now = new Date();
-    const currentYear = now.getFullYear();
+    const currentYear = kstNow(now).year;
     const { latestDate, months } = await resolveTargetMonths(now);
     if (months.length === 0) {
       return NextResponse.json({ error: 'FCPO 시세 데이터가 없어 분석할 수 없습니다.' }, { status: 400 });

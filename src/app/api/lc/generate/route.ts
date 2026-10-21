@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
+import { kstNow } from '@/lib/kst';
+
+export const maxDuration = 60; // Claude 호출 포함
+
+// 개설의뢰인(Applicant, 50) = 수입자(우리 회사). 초안이므로 화면에서 수정 가능
+const APPLICANT = 'SAMYANG FOODS CO., LTD.';
+const PRESENTATION_DAYS = 21; // 48 서류제시기간과 같게
 
 interface SCData {
   contract_number?: string;
@@ -40,17 +47,19 @@ interface LCFields {
   '49': string;
 }
 
-// Helper to calculate shipment deadline (usually 30-45 days after shipment month start)
+// 44C 최종 선적일 = 선적월의 말일.
+// (이전: 1부터 세는 월을 0부터 세는 Date 생성자에 넣고 35일을 더해, 2026-06 선적이 2026-08-29 로 약 두 달 늦게 나옴)
 function calculateShipmentDeadline(shipmentMonth: string): string {
-  if (!shipmentMonth) return '';
-  try {
-    const [year, month] = shipmentMonth.split('-');
-    const date = new Date(parseInt(year), parseInt(month), 25); // Mid-month
-    date.setDate(date.getDate() + 35);
-    return date.toISOString().split('T')[0];
-  } catch {
-    return '';
-  }
+  const m = /^(\d{4})-(\d{2})$/.exec(shipmentMonth || '');
+  if (!m) return '';
+  const last = new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)); // 다음 달 0일 = 이번 달 말일
+  return last.toISOString().slice(0, 10);
+}
+
+function addDays(ymd: string, days: number): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 // Helper to format currency string
@@ -73,19 +82,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Initialize LC fields with defaults
-    const today = new Date().toISOString().split('T')[0];
-    const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 90); // 90 days validity
-    const expiryStr = expiryDate.toISOString().split('T')[0];
+    const today = kstNow().ymd; // 한국 날짜
+    // 31D 유효기일 = 최종 선적일 + 서류제시기간 (선적월이 없으면 오늘 + 90일).
+    // (이전: 항상 오늘 + 90일 → 먼 선적은 유효기일이 최종 선적일보다 앞설 수 있었음)
+    const latestShipment = calculateShipmentDeadline(sc.shipment_month || '');
+    const expiryStr = latestShipment ? addDays(latestShipment, PRESENTATION_DAYS) : addDays(today, 90);
+    // 32B 금액 = 단가 × 수량 (이전: 단가만 들어가 2,000톤 × 1,100 이 'USD 1100.00')
+    const qty = Number(sc.quantity_mt);
+    const price = Number(sc.contract_price);
+    const lcAmount = qty > 0 && price > 0 ? Math.round(qty * price * 100) / 100 : undefined;
 
     const lcFields: LCFields = {
       '40A': 'IRREVOCABLE',
       '20': '', // Documentary credit number - blank for user to fill
       '31C': today,
       '31D': expiryStr, // Date and place of expiry
-      '50': sc.supplier || '삼양식품', // Applicant
+      '50': APPLICANT, // Applicant = 수입자 (이전: 공급사가 들어감)
       '59': sc.supplier || '', // Beneficiary
-      '32B': formatCurrency(sc.contract_price, 'USD'),
+      '32B': formatCurrency(lcAmount, 'USD'),
       '39A': '+/- 5 PERCENT',
       '41D': 'ANY BANK BY NEGOTIATION',
       '42C': 'SIGHT',
@@ -93,7 +107,7 @@ export async function POST(request: NextRequest) {
       '43T': 'ALLOWED',
       '44A': sc.loading_port || '',
       '44B': sc.discharge_port || '',
-      '44C': calculateShipmentDeadline(sc.shipment_month || ''),
+      '44C': latestShipment,
       '44D': sc.shipment_month || '',
       '45A': '', // Will be enhanced by Claude
       '46A': '', // Will be enhanced by Claude

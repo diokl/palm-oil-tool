@@ -1,5 +1,6 @@
 import { dbAll, dbGet, dbRun, dbBatchRun } from './db';
 import type { InventoryRow, Alert, Product } from './types';
+import { kstNow } from './kst';
 
 // ── purchases → inventory.customs_volume 자동 동기화 ──
 //
@@ -46,15 +47,17 @@ export async function syncCustomsVolumeFromPurchases(
     [product, customs.year, customs.month, totalKg, 'purchase_autosync'],
   );
 
-  await recalcInventory(product, customs.year);
-  // 12월 통관이면 다음 해 기초재고가 바뀌므로 다음 해도 재계산
-  if (customs.month === 12) {
-    const dec = await dbGet(
-      `SELECT ending_stock FROM inventory WHERE product = ? AND year = ? AND month = 12`,
-      [product, customs.year],
-    ) as { ending_stock: number } | undefined;
-    await recalcInventory(product, customs.year + 1, Number(dec?.ending_stock ?? 0));
-  }
+  const rows = await recalcInventory(product, customs.year);
+  // 어느 달 통관량이 바뀌어도 12월 기말재고가 바뀌므로 다음 해(기초재고)도 항상 재계산
+  // (이전: 12월 통관일 때만 → 다른 달 변경 시 다음 해 재고·소진 알람이 낡은 값으로 남음)
+  await recalcNextYear(product, customs.year, rows);
+}
+
+/** year 의 12월 기말재고(실재고 우선)로 year+1 을 재계산. 다음 해 행이 없으면 아무것도 안 함. */
+export async function recalcNextYear(product: Product, year: number, yearRows: InventoryRow[]): Promise<void> {
+  const dec = yearRows.find((r) => r.month === 12);
+  if (!dec) return;
+  await recalcInventory(product, year + 1, Number(dec.actual_ending_stock ?? dec.ending_stock ?? 0));
 }
 
 // 여러 (product, shipment_month)에 대해 중복 제거 후 일괄 동기화.
@@ -178,8 +181,7 @@ export async function generateAlerts(persist = false): Promise<Alert[]> {
     const depletionRow = rows.find(r => r.ending_stock !== null && r.ending_stock < 0);
 
     if (!depletionRow) {
-      const currentMonth = new Date().getMonth() + 1;
-      const currentYear = new Date().getFullYear();
+      const { month: currentMonth, year: currentYear } = kstNow(); // 한국 시간 기준 (서버 UTC)
       const currentRow = rows.find(r => r.year === currentYear && r.month === currentMonth);
 
       // 운영 시작 전 (expected_usage 가 0 또는 NULL — 예: MANAGED 26-01~06) 은 알림 스킵.

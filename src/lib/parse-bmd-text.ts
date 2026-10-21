@@ -1,3 +1,4 @@
+import { kstNow } from './kst';
 // BMD 일일 시세 텍스트 파서.
 //
 // 입력 형식 (사용자가 거래일별로 붙여넣음):
@@ -54,7 +55,12 @@ function parseDate(text: string, yearHint: number): string | null {
   // M/D 형식
   const md = text.match(/^\s*(\d{1,2})\s*\/\s*(\d{1,2})/);
   if (md) {
-    return `${yearHint}-${md[1].padStart(2, '0')}-${md[2].padStart(2, '0')}`;
+    const mm = md[1].padStart(2, '0'), dd = md[2].padStart(2, '0');
+    // 연말·연초가 섞인 붙여넣기('12/30 … 1/2', 연도 힌트 2027)에서 12/30 이 2027-12-30(미래)이 되지 않도록,
+    // 오늘(한국 시간)보다 60일 넘게 미래면 전년으로 본다.
+    let y = yearHint;
+    if (Date.parse(`${y}-${mm}-${dd}T00:00:00Z`) - Date.parse(`${kstNow().ymd}T00:00:00Z`) > 60 * 86400000) y -= 1;
+    return `${y}-${mm}-${dd}`;
   }
   return null;
 }
@@ -80,7 +86,7 @@ function num(s: string): number {
 
 // 메인 파서. 여러 줄/여러 거래일/오전·오후 혼합 텍스트 받음.
 export function parseBmdText(text: string, opts: { yearHint?: number } = {}): BmdParseResult {
-  const yearHint = opts.yearHint ?? new Date().getFullYear();
+  const yearHint = opts.yearHint ?? kstNow().year;
   const errors: BmdParseError[] = [];
 
   // 줄 단위 처리하되, '5/20' 또는 'YYYY-MM-DD'로 시작하는 새 거래일 시작 시 day buffer flush.

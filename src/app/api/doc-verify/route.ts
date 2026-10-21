@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
+export const maxDuration = 60; // PDF 텍스트 추출 + Claude 호출
+
 async function parsePdf(buffer: Buffer): Promise<string> {
   const mod = await import('pdf-parse');
   const pdfParse = (mod as any).default || mod;
@@ -27,6 +29,9 @@ interface VerificationResult {
   extracted_fields: Record<string, any>;
   discrepancies: Discrepancy[];
   summary: string;
+  // 실제로 검증이 끝났는지. Claude 호출·JSON 해석이 실패하면 false — 화면이 '통과' 로 보이지 않게
+  // (이전: 실패해도 success:true + 불일치 0건이라 초록색 '통과' 카드로 표시)
+  verified: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -61,6 +66,7 @@ export async function POST(request: NextRequest) {
       extracted_fields: {},
       discrepancies: [],
       summary: '',
+      verified: false,
     };
 
     if (process.env.ANTHROPIC_API_KEY) {
@@ -89,7 +95,7 @@ export async function POST(request: NextRequest) {
 ${lcDescription}
 
 Document text:
-${documentText.substring(0, 3000)}
+${documentText.substring(0, 30000)}
 
 Provide your response as JSON with this structure:
 {
@@ -128,6 +134,7 @@ Return only valid JSON, no other text.`,
           const jsonMatch = claudeText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
+            verificationData.verified = true;
             verificationData.document_type = parsed.document_type || 'Unknown';
             verificationData.extracted_fields = parsed.extracted_fields || {};
             verificationData.summary = parsed.summary || '';

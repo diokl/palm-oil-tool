@@ -55,14 +55,15 @@ export async function calculateBoxRange(
   // Get all prices for this contract month, ordered by date
   const query = asOfDate
     ? `SELECT date, settlement_usd FROM fcpo_settlement
-       WHERE contract_month = ? AND settlement_usd IS NOT NULL AND date <= ?
+       WHERE contract_month = ? AND settlement_usd > 100 AND date <= ?
        ORDER BY date ASC`
     : `SELECT date, settlement_usd FROM fcpo_settlement
-       WHERE contract_month = ? AND settlement_usd IS NOT NULL
+       WHERE contract_month = ? AND settlement_usd > 100
        ORDER BY date ASC`;
+  // settlement_usd > 100: 명백한 오입력(예: 100, 182.5) 제외 — 다른 모듈(market-price-match·exposure-risk)과 같은 기준
   const params = asOfDate ? [contractMonth, asOfDate] : [contractMonth];
   const prices = prefetched
-    ? prefetched.filter(p => !asOfDate || p.date <= asOfDate).map(p => ({ date: p.date, settlement_usd: Number(p.settlement_usd) }))
+    ? prefetched.filter(p => (!asOfDate || p.date <= asOfDate) && Number(p.settlement_usd) > 100).map(p => ({ date: p.date, settlement_usd: Number(p.settlement_usd) }))
     : await dbAll(query, params) as { date: string; settlement_usd: number }[];
 
   if (prices.length < 10) return null;

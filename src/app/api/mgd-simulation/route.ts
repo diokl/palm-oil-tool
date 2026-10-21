@@ -51,6 +51,15 @@ export async function GET(request: NextRequest) {
 //  - { kind:'location', id, qty_kg }              위치별 재고 수정
 //  - { kind:'demand', product, month, monthly_kg } 월별 소요 수정
 //  - (호환) { id, qty_kg }                         위치 재고 수정
+// 숫자 입력 해석: 천 단위 쉼표 허용, 숫자가 아니면 null.
+// (이전: Number(x) || 0 이라 "1,200,000" 이 0 으로 저장되고 success, POST 는 NaN 저장)
+function parseNum(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+const badNumber = (what: string, v: unknown) => NextResponse.json({ error: `${what} 값이 숫자가 아닙니다: ${String(v)}` }, { status: 400 });
+
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
@@ -58,29 +67,35 @@ export async function PUT(request: NextRequest) {
       // 계획 파라미터 (key/value): july_cap_kg | committed_kg | coverage_months | lead_months
       const allowed = ['july_cap_kg', 'committed_kg', 'coverage_months', 'lead_months'];
       if (!allowed.includes(body.key)) return NextResponse.json({ error: 'invalid key' }, { status: 400 });
+      const v = parseNum(body.value);
+      if (v === null || v < 0) return badNumber(body.key, body.value);
       await dbRun(
         `INSERT INTO mgd_config (key, value) VALUES (?, ?)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [body.key, Number(body.value) || 0],
+        [body.key, v],
       );
       return NextResponse.json({ success: true });
     }
     if (body.kind === 'demand') {
+      const kg = parseNum(body.monthly_kg);
+      if (kg === null || kg < 0) return badNumber('월 소요량', body.monthly_kg);
       await dbRun(
         `INSERT INTO demand_config (product, month, monthly_kg) VALUES (?, ?, ?)
          ON CONFLICT (product, month) DO UPDATE SET monthly_kg = EXCLUDED.monthly_kg, updated_at = NOW()`,
-        [body.product, body.month, Number(body.monthly_kg) || 0],
+        [body.product, body.month, kg],
       );
       return NextResponse.json({ success: true });
     }
     // 위치별 재고 (기본)
+    const qty = parseNum(body.qty_kg);
+    if (qty === null || qty < 0) return badNumber('재고량', body.qty_kg);
     if (body.id != null) {
-      await dbRun('UPDATE stock_locations SET qty_kg = ?, updated_at = NOW() WHERE id = ?', [Number(body.qty_kg) || 0, body.id]);
+      await dbRun('UPDATE stock_locations SET qty_kg = ?, updated_at = NOW() WHERE id = ?', [qty, body.id]);
     } else if (body.location && body.product) {
       await dbRun(
         `INSERT INTO stock_locations (location, product, qty_kg) VALUES (?, ?, ?)
          ON CONFLICT (location, product) DO UPDATE SET qty_kg = EXCLUDED.qty_kg, updated_at = NOW()`,
-        [body.location, body.product, Number(body.qty_kg) || 0],
+        [body.location, body.product, qty],
       );
     } else {
       return NextResponse.json({ error: 'id 또는 (location, product) 필요' }, { status: 400 });
@@ -102,9 +117,11 @@ export async function POST(request: NextRequest) {
     if (valid.length === 0) {
       return NextResponse.json({ error: 'date, product, delta_kg 필요' }, { status: 400 });
     }
+    const bad = valid.find((r) => parseNum(r.delta_kg) === null);
+    if (bad) return badNumber('조정량', bad.delta_kg);
     await dbBatchRun(valid.map((r) => ({
       sql: `INSERT INTO daily_adjustments (date, product, delta_kg, label, note) VALUES (?, ?, ?, ?, ?)`,
-      params: [r.date, r.product, Number(r.delta_kg), r.label || '기타', r.note || null],
+      params: [r.date, r.product, parseNum(r.delta_kg), r.label || '기타', r.note || null],
     })));
     return NextResponse.json({ success: true, added: valid.length });
   } catch (error: any) {

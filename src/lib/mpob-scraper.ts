@@ -334,9 +334,19 @@ function parseExportPort(html: string, year: number): MpobScrapedRecord[] {
   const rowRe = /^(BUTTERWORTH|PORT KLANG|PASIR GUDANG|OTHERS|PEN\. MALAYSIA|LAHAD DATU|SANDAKAN|SABAH\/SARAWAK|MALAYSIA)$/i;
   const dataRows = rows.filter((r) => rowRe.test(r[0] || ''));
   const recs: MpobScrapedRecord[] = [];
-  dataRows.forEach((r, idx) => {
-    const def = EXPORT_PORT_ORDER[idx];
-    if (!def) return;
+  // 행 이름으로 매핑하고, 이름이 같은 두 OTHERS 만 순서로 구분(첫 번째 = 반도, 두 번째 = 사바·사라왁).
+  // (이전: 순서만으로 매핑 → 항구 한 줄이 빠지거나 캡션 행이 더 잡히면 이후 항구가 전부 다른 이름으로 저장)
+  const byName = new Map(EXPORT_PORT_ORDER.map((d) => [d.name, d]));
+  let othersSeen = 0;
+  const seen = new Set<string>();
+  dataRows.forEach((r) => {
+    // 숫자가 하나도 없는 행(표 제목 'MALAYSIA' 같은 캡션)은 건너뛴다
+    if (!Array.from({ length: 12 }, (_, i) => num(r[i + 1])).some((v) => v != null)) return;
+    const label = (r[0] || '').trim().toUpperCase();
+    const name = label === 'OTHERS' ? (othersSeen++ === 0 ? 'OTHERS (PEN)' : 'OTHERS (SS)') : label;
+    const def = byName.get(name);
+    if (!def || seen.has(def.name)) return; // 모르는 이름·중복 행(캡션 등)은 버림
+    seen.add(def.name);
     for (let m = 1; m <= 12; m++) {
       const v = num(r[m]);
       if (v != null) {

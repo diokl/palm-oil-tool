@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbBatchRun } from '@/lib/db';
+import { dbRun } from '@/lib/db';
 import { syncCustomsVolumeForShipments } from '@/lib/inventory-calc';
 import type { Product } from '@/lib/types';
 
@@ -122,6 +122,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 선적월(ETD·Order No 에서 추출)을 못 읽었거나 단가·수량이 0 이하인 행은 저장하지 않는다.
+    // (이전: 선적월 '' 로 저장돼 재고 동기화에서 빠지고 자동 채우기에 NaN 제안이 생김)
+    const invalid = records.filter((r) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(r.shipment_month) || !(r.unit_price > 0) || !(r.qty_mt > 0));
+    const invalidLabel = invalid.slice(0, 5).map((r) => r.order_no || '(order no 없음)').join(', ');
+
     // If mode === 'preview', just return parsed data without inserting
     if (mode === 'preview') {
       return NextResponse.json({
@@ -129,26 +134,27 @@ export async function POST(request: NextRequest) {
         preview: true,
         data: records,
         count: records.length,
+        invalid_count: invalid.length,
+        ...(invalid.length ? { warning: `선적월·단가·수량을 읽지 못한 행 ${invalid.length}건: ${invalidLabel}` } : {}),
       });
     }
-
-    // Insert in batches of 20
-    let insertedCount = 0;
-    for (let i = 0; i < records.length; i += 20) {
-      const batch = records.slice(i, Math.min(i + 20, records.length));
-      await dbBatchRun(
-        batch.map((p) => ({
-          sql: `INSERT INTO purchases (order_no, product, shipment_month, supplier, manufacturer, product_name, unit_price, qty_mt, amount_usd, incoterms, payment_terms, etd, contract_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          params: [
-            p.order_no, p.product, p.shipment_month, p.supplier, p.manufacturer,
-            p.product_name, p.unit_price, p.qty_mt, p.amount_usd, p.incoterms,
-            p.payment_terms, p.etd, p.contract_number,
-          ],
-        }))
+    if (invalid.length) {
+      return NextResponse.json(
+        { error: `선적월(ETD/Order No)이나 단가·수량을 읽지 못한 행이 ${invalid.length}건 있습니다: ${invalidLabel}. 해당 행을 고친 뒤 다시 붙여넣으세요.` },
+        { status: 400 },
       );
-      insertedCount += batch.length;
     }
+
+    // 전체를 쿼리 1번에 저장 — 일부만 들어가는 일이 없다.
+    // (이전: 20행씩 따로 커밋 → 45번째 행에서 실패하면 1~40행만 저장되고, 다시 붙여넣으면 중복)
+    await dbRun(
+      `INSERT INTO purchases (order_no, product, shipment_month, supplier, manufacturer, product_name, unit_price, qty_mt, amount_usd, incoterms, payment_terms, etd, contract_number)
+       SELECT order_no, product, shipment_month, supplier, manufacturer, product_name, unit_price, qty_mt, amount_usd, incoterms, payment_terms, etd, contract_number
+       FROM jsonb_to_recordset(?::text::jsonb) AS t(order_no text, product text, shipment_month text, supplier text, manufacturer text, product_name text,
+         unit_price double precision, qty_mt double precision, amount_usd double precision, incoterms text, payment_terms text, etd text, contract_number text)`,
+      [JSON.stringify(records)],
+    );
+    const insertedCount = records.length;
 
     // 영향받은 (product, shipment_month) 일괄 수집 후 한 번에 inventory.customs_volume 동기화
     const affected = records

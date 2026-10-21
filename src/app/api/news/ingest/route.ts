@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbRun } from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
+import { isValidYmd } from '@/lib/kst';
 
 // 북마클릿(KoreaPDS 등 본인 로그인 세션)에서 수집한 기사들을 받아 중복을 거르고 저장.
 // - 인증: 토큰(?token= 또는 x-ingest-token 헤더) === NEWS_INGEST_TOKEN
@@ -12,6 +13,8 @@ import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 // (미들웨어 PUBLIC_PATHS 에 /api/news/ingest 등록됨 — 세션 쿠키 없이 토큰으로만 통과)
 
 export const dynamic = 'force-dynamic';
+// 새 기사마다 Claude 시황 판정(2~3초)을 순서대로 하므로 여유 있게
+export const maxDuration = 60;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -28,8 +31,9 @@ export async function OPTIONS() {
 function normalizeDate(raw: string): string {
   if (!raw) return '';
   const m = String(raw).match(/(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
-  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-  return String(raw).trim();
+  const ymd = m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : '';
+  // 형식이 다른 날짜를 그대로 저장하면 뉴스 조회가 깨질 수 있어 빈 값(→ 그 기사 건너뜀)으로
+  return isValidYmd(ymd) ? ymd : '';
 }
 
 async function analyzeSentiment(text: string): Promise<{ sentiment: string; impact: string }> {

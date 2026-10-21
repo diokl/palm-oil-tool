@@ -1,4 +1,5 @@
 import { dbAll } from './db';
+import { kstNow } from './kst';
 
 // 단위 환산: 1 cent/lb = $22.0462/MT (1 MT = 2204.6226 lb)
 export const CENTS_LB_TO_USD_MT = 22.046226;
@@ -22,9 +23,11 @@ export interface SpreadPoint {
   spread: number | null;      // 대두유 − 팜유(as-of). sbo 있는 날만 계산
 }
 
-// 연도 필터: 2025·2026만 본다 (일단은).
-const YEAR_FROM = '2025-01-01';
-const YEAR_TO = '2027-01-01'; // exclusive
+// 연도 필터: 작년·올해만 본다 (한국 시간 기준 올해). 이전에는 2025·2026 고정이라 2027-01-01 부터 갱신이 멈췄다.
+function yearWindow(): [string, string] {
+  const y = kstNow().year;
+  return [`${y - 1}-01-01`, `${y + 1}-01-01`]; // [from, to) — to 는 미포함
+}
 
 // 팜유(FCPO 최근월) + 대두유(oil_prices) → 스프레드.
 //
@@ -39,7 +42,8 @@ export async function getOilSpread(_limitDays = 60): Promise<{
   series: SpreadPoint[];
   prev: SpreadPoint | null;
 }> {
-  // 대두유 (2025·2026)
+  const [YEAR_FROM, YEAR_TO] = yearWindow();
+  // 대두유 (작년·올해)
   const sboRows = await dbAll(
     `SELECT date, price_usd_mt FROM oil_prices
      WHERE commodity = 'SBO' AND price_usd_mt IS NOT NULL

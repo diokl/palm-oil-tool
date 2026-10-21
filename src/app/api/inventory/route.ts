@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dbAll, dbGet, dbRun, dbBatchRun } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
-import { recalcInventory } from '@/lib/inventory-calc';
+import { recalcInventory, recalcNextYear } from '@/lib/inventory-calc';
 
 export async function GET(request: NextRequest) {
   try {
@@ -138,13 +138,9 @@ export async function PUT(request: NextRequest) {
     // Recalculate inventory — returns updated rows directly (no extra SELECT needed)
     const updatedRows = await recalcInventory(current.product, current.year);
 
-    // Only recalc next year if editing December (month 12) — saves ~3 round trips
-    if (current.month === 12) {
-      const dec = updatedRows.find((r: any) => r.month === 12);
-      const decEndingStock = dec?.ending_stock ?? 0;
-      // Fire-and-forget: next year recalc doesn't affect current year response
-      recalcInventory(current.product, current.year + 1, decEndingStock).catch(() => {});
-    }
+    // 어느 달을 고쳐도 12월 기말재고가 바뀌므로 다음 해도 재계산하고 끝날 때까지 기다린다.
+    // (이전: 12월 수정일 때만, 그것도 응답 뒤 fire-and-forget → Vercel 에서 응답 후 실행이 멈출 수 있음)
+    await recalcNextYear(current.product, current.year, updatedRows);
 
     return NextResponse.json({ data: updatedRows });
   } catch (error: any) {

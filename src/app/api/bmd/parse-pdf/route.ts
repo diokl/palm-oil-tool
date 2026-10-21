@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
+export const maxDuration = 60; // PDF + Claude 호출 (기본 제한시간으로는 부족할 수 있음)
+
 interface ParsedBMDRow {
   month: string;
   contract_month: string;

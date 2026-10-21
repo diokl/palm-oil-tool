@@ -3,6 +3,10 @@ import { dbAll, dbRun, dbLastId } from '@/lib/db';
 import { seedInitialData } from '@/lib/seed-data';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
+import { kstNow, isValidYmd } from '@/lib/kst';
+
+// 뉴스 처리는 Claude 호출(대량 붙여넣기는 수십 초)이 있어 기본 제한시간으로는 부족할 수 있다
+export const maxDuration = 60;
 
 // Ensure full_content column exists (migration-safe).
 // No-op under PostgreSQL/Supabase: schema is managed out-of-band via schema.sql.
@@ -184,7 +188,7 @@ ${rawText}
   const validImpacts = ['High', 'Medium', 'Low'];
 
   return parsed.map((item: any) => ({
-    date: item.date || new Date().toISOString().slice(0, 10),
+    date: isValidYmd(item.date) ? item.date : kstNow().ymd, // AI 가 형식이 다른 날짜를 주면 오늘(한국)로
     title: item.title || item.full_content?.substring(0, 50) || '',
     full_content: item.full_content || '',
     sentiment: validSentiments.includes(item.sentiment) ? item.sentiment : '보합',
@@ -203,8 +207,12 @@ export async function GET(request: NextRequest) {
     const data = await dbAll('SELECT * FROM news ORDER BY date DESC, id DESC LIMIT ?', [limit]);
 
     // Sentiment summary
+    // date 는 'YYYY-MM-DD' 텍스트 — 문자열 비교로 (date::date 캐스트는 형식이 다른 행 하나에도 조회 전체가 500),
+    // 기준일은 한국 날짜 7일 전 (CURRENT_DATE 는 UTC)
+    const since = kstNow(new Date(Date.now() - 7 * 86400000)).ymd;
     const recent = await dbAll(
-      `SELECT sentiment, COUNT(*) as cnt FROM news WHERE date::date >= (CURRENT_DATE - INTERVAL '7 days') GROUP BY sentiment`
+      `SELECT sentiment, COUNT(*) as cnt FROM news WHERE date >= ? GROUP BY sentiment`,
+      [since],
     ) as { sentiment: string; cnt: number }[];
 
     return NextResponse.json({ data, sentiment_summary: recent });
@@ -238,6 +246,10 @@ export async function POST(request: NextRequest) {
 
     // 레거시 대량 업로드 (이전 형식 호환)
     if (body.bulk_items && Array.isArray(body.bulk_items)) {
+      const badDates = body.bulk_items.filter((it: any) => !isValidYmd(it?.date)).map((it: any) => String(it?.date));
+      if (badDates.length) {
+        return NextResponse.json({ error: `날짜 형식이 올바르지 않습니다 (YYYY-MM-DD): ${badDates.slice(0, 5).join(', ')}` }, { status: 400 });
+      }
       const results = [];
       for (const item of body.bulk_items) {
         const aiResult = await analyzeNewsWithAI(item.content);
@@ -253,6 +265,12 @@ export async function POST(request: NextRequest) {
 
     // 단건 입력
     const { date, content, full_content, sentiment, impact, created_by, auto_analyze } = body;
+    if (!isValidYmd(date)) {
+      return NextResponse.json({ error: `날짜 형식이 올바르지 않습니다 (YYYY-MM-DD): ${date}` }, { status: 400 });
+    }
+    if (!content || typeof content !== 'string') {
+      return NextResponse.json({ error: '뉴스 내용이 비어 있습니다' }, { status: 400 });
+    }
 
     let finalSentiment = sentiment;
     let finalImpact = impact;

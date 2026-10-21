@@ -1,4 +1,4 @@
-import { dbAll, dbBatchRun } from './db';
+import { dbAll, dbRun } from './db';
 import { toUsdMt } from './oil-spread';
 
 // ── 매크로·에너지·환율 자동 수집 ──
@@ -35,14 +35,22 @@ function isoDaysAgo(days: number): string {
 }
 
 async function upsertSeries(series: string, points: { date: string; value: number }[], source: string): Promise<number> {
-  if (points.length === 0) return 0;
-  const ops = points.map(p => ({
-    sql: `INSERT INTO market_data (series, date, value, source, updated_at) VALUES (?, ?, ?, ?, NOW())
-          ON CONFLICT (series, date) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source, updated_at = NOW()`,
-    params: [series, p.date, p.value, source],
-  }));
-  await dbBatchRun(ops);
-  return points.length;
+  // 같은 날짜가 두 번 오면 ON CONFLICT 가 'cannot affect row a second time' 으로 실패 → 마지막 값만 남김. NaN 은 버림.
+  const byDate = new Map<string, number>();
+  for (const p of points) if (Number.isFinite(p.value)) byDate.set(p.date, p.value);
+  const rows = [...byDate].map(([date, value]) => ({ series, date, value, source }));
+  if (rows.length === 0) return 0;
+  // 행을 JSON 한 덩어리로 넘겨 쿼리 1번에 upsert (lib/mpob-sync 와 같은 방식).
+  // 행마다 INSERT 하면 함수↔DB 왕복 ~0.3초 × 행 수가 쌓여 730일 백필(약 1,500행)은 60초를 넘긴다.
+  // 파라미터는 ?::text::jsonb — ?::jsonb 면 postgres.js 가 문자열을 한 번 더 JSON 인코딩한다.
+  await dbRun(
+    `INSERT INTO market_data (series, date, value, source, updated_at)
+     SELECT series, date, value, source, NOW()
+     FROM jsonb_to_recordset(?::text::jsonb) AS t(series text, date text, value double precision, source text)
+     ON CONFLICT (series, date) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source, updated_at = NOW()`,
+    [JSON.stringify(rows)],
+  );
+  return rows.length;
 }
 
 // ── 환율 ──
@@ -118,15 +126,19 @@ async function collectSoybeanOil(days: number): Promise<SyncItem> {
   try {
     const pts = await yahooDaily('ZL=F', days);
     if (pts.length === 0) return { series: 'SBO', count: 0, source: 'yahoo' };
-    const ops = pts.map(p => ({
-      sql: `INSERT INTO oil_prices (date, commodity, price_native, unit_native, price_usd_mt, source)
-            VALUES (?, 'SBO', ?, 'cents/lb', ?, 'yahoo_auto')
-            ON CONFLICT (date, commodity) DO UPDATE SET
-              price_native = EXCLUDED.price_native, unit_native = EXCLUDED.unit_native, price_usd_mt = EXCLUDED.price_usd_mt
-            WHERE oil_prices.source = 'yahoo_auto'`,
-      params: [p.date, p.value, Math.round(toUsdMt(p.value, 'cents/lb') * 100) / 100],
-    }));
-    await dbBatchRun(ops);
+    // 쿼리 1번 일괄 upsert (행별 왕복 누적으로 시간 초과 방지). 같은 날짜 중복은 마지막 값만.
+    const byDate = new Map<string, number>();
+    for (const p of pts) if (Number.isFinite(p.value)) byDate.set(p.date, p.value);
+    const rows = [...byDate].map(([date, v]) => ({ date, price_native: v, price_usd_mt: Math.round(toUsdMt(v, 'cents/lb') * 100) / 100 }));
+    await dbRun(
+      `INSERT INTO oil_prices (date, commodity, price_native, unit_native, price_usd_mt, source)
+       SELECT date, 'SBO', price_native, 'cents/lb', price_usd_mt, 'yahoo_auto'
+       FROM jsonb_to_recordset(?::text::jsonb) AS t(date text, price_native double precision, price_usd_mt double precision)
+       ON CONFLICT (date, commodity) DO UPDATE SET
+         price_native = EXCLUDED.price_native, unit_native = EXCLUDED.unit_native, price_usd_mt = EXCLUDED.price_usd_mt
+       WHERE oil_prices.source = 'yahoo_auto'`,
+      [JSON.stringify(rows)],
+    );
     return { series: 'SBO', count: pts.length, source: 'yahoo', latest: pts[pts.length - 1].date };
   } catch (e: any) {
     return { series: 'SBO', count: 0, source: 'yahoo', error: e.message };

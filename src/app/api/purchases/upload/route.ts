@@ -3,6 +3,8 @@ import { specFromFlags, productForSpec, defaultPremiums } from '@/lib/spec';
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_MODEL, LOW_EFFORT, responseText } from '@/lib/anthropic';
 
+export const maxDuration = 60; // PDF + Claude 호출 (기본 제한시간으로는 부족할 수 있음)
+
 // Extract SC fields from PDF text using pattern matching
 function extractSCFields(text: string): Record<string, any> {
   const result: Record<string, any> = {};
