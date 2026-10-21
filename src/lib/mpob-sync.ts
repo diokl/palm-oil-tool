@@ -18,33 +18,39 @@ export async function runMpobSync(opts: ScrapeOptions = {}): Promise<MpobSyncRes
   const dedup = new Map<string, typeof records[number]>();
   for (const r of records) dedup.set(`${r.category}|${r.item_name}|${r.year}|${r.month}`, r);
 
-  const ops = [...dedup.values()].map((r) => ({
-    sql: `INSERT INTO mpob_data (category, item_name, year, month, value, value_rm, parent_group, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT (category, item_name, year, month) DO UPDATE SET
-            value = EXCLUDED.value,
-            value_rm = EXCLUDED.value_rm,
-            parent_group = EXCLUDED.parent_group,
-            sort_order = EXCLUDED.sort_order,
-            updated_at = NOW()`,
-    params: [
-      r.category, r.item_name, r.year, r.month,
-      r.value ?? null, r.value_rm ?? null,
-      r.parent_group ?? null, r.sort_order,
-    ],
+  const rows = [...dedup.values()].map((r) => ({
+    category: r.category, item_name: r.item_name, year: r.year, month: r.month,
+    value: r.value ?? null, value_rm: r.value_rm ?? null,
+    parent_group: r.parent_group ?? null, sort_order: r.sort_order,
   }));
 
-  // Batch in chunks, run chunks in parallel (Vercel 60s 제한 대비 시간 절약).
-  const chunks: typeof ops[] = [];
-  for (let i = 0; i < ops.length; i += 100) chunks.push(ops.slice(i, i + 100));
-  await Promise.all(chunks.map((c) => dbBatchRun(c)));
+  // 행을 JSON 한 덩어리로 넘겨 쿼리 1번에 upsert.
+  // 행마다 INSERT 하면 함수(미국)↔DB(도쿄) 왕복 ~0.3s × 수백 건이 쌓여 60초 초과(504) —
+  // 2026-10-21 실측: 100행 트랜잭션 1개에 30초, 4커넥션으로 700행 저장 중 타임아웃.
+  const ops: { sql: string; params: any[] }[] = [];
+  for (let i = 0; i < rows.length; i += 1000) {
+    ops.push({
+      sql: `INSERT INTO mpob_data (category, item_name, year, month, value, value_rm, parent_group, sort_order)
+            SELECT category, item_name, year, month, value, value_rm, parent_group, sort_order
+            FROM jsonb_to_recordset(?::jsonb) AS t(category text, item_name text, year int, month int,
+                                                  value numeric, value_rm numeric, parent_group text, sort_order int)
+            ON CONFLICT (category, item_name, year, month) DO UPDATE SET
+              value = EXCLUDED.value,
+              value_rm = EXCLUDED.value_rm,
+              parent_group = EXCLUDED.parent_group,
+              sort_order = EXCLUDED.sort_order,
+              updated_at = NOW()`,
+      params: [JSON.stringify(rows.slice(i, i + 1000))],
+    });
+  }
+  if (ops.length) await dbBatchRun(ops);
 
   // 일부 보고서만 실패(시간 초과 등)한 경우 성공분은 저장하고 실패 사유를 함께 알린다.
   const failReasons = [...new Set(summary.map((s) => s.error).filter(Boolean))];
   return {
-    count: ops.length,
+    count: rows.length,
     summary,
-    message: `MPOB ${opts.history ? '과거 백필' : '자동 동기화'} 완료: ${ops.length}건 (${summary.map((s) => `${s.category} ${s.error ? '실패' : s.count}`).join(', ')})`
+    message: `MPOB ${opts.history ? '과거 백필' : '자동 동기화'} 완료: ${rows.length}건 (${summary.map((s) => `${s.category} ${s.error ? '실패' : s.count}`).join(', ')})`
       + (failReasons.length ? `\n실패 사유: ${failReasons.join(' / ')}` : ''),
   };
 }
