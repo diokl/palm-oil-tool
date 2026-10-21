@@ -39,9 +39,12 @@ export async function runMpobSync(opts: ScrapeOptions = {}): Promise<MpobSyncRes
   for (let i = 0; i < ops.length; i += 100) chunks.push(ops.slice(i, i + 100));
   await Promise.all(chunks.map((c) => dbBatchRun(c)));
 
+  // 일부 보고서만 실패(시간 초과 등)한 경우 성공분은 저장하고 실패 사유를 함께 알린다.
+  const failReasons = [...new Set(summary.map((s) => s.error).filter(Boolean))];
   return {
     count: ops.length,
     summary,
-    message: `MPOB ${opts.history ? '과거 백필' : '자동 동기화'} 완료: ${ops.length}건 (${summary.map((s) => `${s.category} ${s.count}`).join(', ')})`,
+    message: `MPOB ${opts.history ? '과거 백필' : '자동 동기화'} 완료: ${ops.length}건 (${summary.map((s) => `${s.category} ${s.error ? '실패' : s.count}`).join(', ')})`
+      + (failReasons.length ? `\n실패 사유: ${failReasons.join(' / ')}` : ''),
   };
 }

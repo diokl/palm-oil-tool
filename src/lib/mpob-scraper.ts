@@ -11,6 +11,11 @@
 const MPOB_BASE = 'https://bepi.mpob.gov.my';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
+// Vercel 함수 상한(maxDuration 60s) 안에서 끝내기 위한 시간 예산.
+// 요청 하나가 멈춰도 함수 전체가 504 로 죽지 않도록 요청별 타임아웃 + 전체 수집 마감을 둔다.
+const FETCH_TIMEOUT_MS = 15_000;
+const SCRAPE_BUDGET_MS = 45_000; // 로그인 포함. 나머지 ~15s 는 DB upsert 몫
+
 export interface MpobScrapedRecord {
   category: string;
   item_name: string;
@@ -61,19 +66,24 @@ export interface ScrapeOptions {
   fromYear?: number;
 }
 
-// 섹션 페이지 → 연도 카테고리 링크 → 기사 링크 순으로 기사 URL 탐색.
+// 섹션·연도 페이지는 여러 보고서가 공유하므로 Promise 로 캐시해 병렬 탐색에서도 한 번만 받는다.
+class PageCache {
+  private pages = new Map<string, Promise<string>>();
+  constructor(private jar: CookieJar) {}
+  get(url: string): Promise<string> {
+    let p = this.pages.get(url);
+    if (!p) { p = getText(this.jar, url); this.pages.set(url, p); }
+    return p;
+  }
+}
+
+// 섹션 페이지 → 연도 카테고리 링크 → 기사 링크 순으로 기사 URL 탐색 (보고서 1종 단위).
 // 기본: 현재 연도, 없으면(1월 등) 전년도. 모두 실패 시 2026 고정 URL.
 // history: 섹션 페이지에 있는 모든 연도 링크를 대상으로 (연도별 페이지는 전년·당년 2개년을 담고 있음).
-async function resolveReportPages(jar: CookieJar, now = new Date(), opts: ScrapeOptions = {}): Promise<ReportPage[]> {
-  const sectionCache = new Map<string, string>();
-  const pages: ReportPage[] = [];
-  const getSection = async (section: string) => {
-    let html = sectionCache.get(section);
-    if (html == null) { html = await getText(jar, `${MPOB_BASE}/index.php/${section}`); sectionCache.set(section, html); }
-    return html;
-  };
-  const findArticle = async (def: ReportDef, year: number): Promise<ReportPage | null> => {
-    const sectionHtml = await getSection(def.section);
+async function resolveReportPages(def: ReportDef, cache: PageCache, now = new Date(), opts: ScrapeOptions = {}): Promise<ReportPage[]> {
+  const getSection = () => cache.get(`${MPOB_BASE}/index.php/${def.section}`);
+  const findArticle = async (year: number): Promise<ReportPage | null> => {
+    const sectionHtml = await getSection();
     const artRe = new RegExp(`href="([^"]*?/\\d+-${def.articleSlug}-${year}(?:[/?#][^"]*)?)"`, 'i');
     // 1) 섹션 페이지가 기사 링크를 직접 나열하는 경우 (현재 BEPI 구조)
     let am = sectionHtml.match(artRe);
@@ -81,34 +91,35 @@ async function resolveReportPages(jar: CookieJar, now = new Date(), opts: Scrape
     if (!am) {
       const yearRe = new RegExp(`href="([^"]*?/index\\.php/${def.section}/\\d+-${def.yearSlug}-${year})"`, 'i');
       const ym = sectionHtml.match(yearRe);
-      if (ym) am = (await getText(jar, absolutize(ym[1]))).match(artRe);
+      if (ym) am = (await cache.get(absolutize(ym[1]))).match(artRe);
     }
     return am ? { category: def.category, url: absolutize(am[1]), year, discovered: true } : null;
   };
 
-  for (const def of REPORT_DEFS) {
-    if (opts.history) {
-      const fromYear = opts.fromYear ?? 2022;
-      let years: number[] = [];
-      try {
-        const sectionHtml = await getSection(def.section);
-        const re = new RegExp(`/index\\.php/${def.section}/\\d+-${def.yearSlug}-(20\\d{2})`, 'gi');
-        years = [...new Set([...sectionHtml.matchAll(re)].map(m => parseInt(m[1], 10)))].filter(y => y >= fromYear).sort();
-      } catch { /* 섹션 조회 실패 → 아래 최신 연도 로직으로 */ }
-      let any = false;
-      for (const year of years) {
-        try { const p = await findArticle(def, year); if (p) { pages.push(p); any = true; } } catch { /* skip year */ }
-      }
-      if (any) continue;
-    }
-    let found: ReportPage | null = null;
-    for (const year of [now.getFullYear(), now.getFullYear() - 1]) {
-      try { found = await findArticle(def, year); if (found) break; } catch { /* 다음 연도/폴백으로 */ }
-    }
-    if (!found && FALLBACK_URLS_2026[def.category]) found = { category: def.category, url: FALLBACK_URLS_2026[def.category], year: 2026, discovered: false };
-    if (found) pages.push(found);
+  if (opts.history) {
+    const fromYear = opts.fromYear ?? 2022;
+    let years: number[] = [];
+    try {
+      const sectionHtml = await getSection();
+      const re = new RegExp(`/index\\.php/${def.section}/\\d+-${def.yearSlug}-(20\\d{2})`, 'gi');
+      years = [...new Set([...sectionHtml.matchAll(re)].map(m => parseInt(m[1], 10)))].filter(y => y >= fromYear).sort();
+    } catch { /* 섹션 조회 실패 → 아래 최신 연도 로직으로 */ }
+    // 연도 순서 유지 (sync 의 dedup 이 뒤 연도 페이지 값을 채택)
+    const found = (await Promise.all(years.map((y) => findArticle(y).catch(() => null)))).filter((p): p is ReportPage => p != null);
+    if (found.length) return found;
   }
-  return pages;
+  for (const year of [now.getFullYear(), now.getFullYear() - 1]) {
+    try { const found = await findArticle(year); if (found) return [found]; } catch { /* 다음 연도/폴백으로 */ }
+  }
+  const fallback = FALLBACK_URLS_2026[def.category];
+  return fallback ? [{ category: def.category, url: fallback, year: 2026, discovered: false }] : [];
+}
+
+// p 가 deadline 까지 끝나지 않으면 onTimeout 으로 대신 끝낸다 (진행 중 요청은 버림).
+function withDeadline<T>(p: Promise<T>, deadline: number, onTimeout: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(onTimeout), Math.max(0, deadline - Date.now())); });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 // ---------- tiny cookie jar ----------
@@ -177,12 +188,10 @@ async function login(jar: CookieJar): Promise<void> {
   }
 
   // 1) GET login page → session cookie + CSRF token + return value
-  const loginPageRes = await fetch(`${MPOB_BASE}/index.php`, {
+  const { html } = await mpobFetch(jar, `${MPOB_BASE}/index.php`, {
     headers: { 'User-Agent': UA },
     redirect: 'manual',
   });
-  jar.absorb(loginPageRes);
-  const html = await loginPageRes.text();
 
   const tokenMatch = html.match(/name="([a-f0-9]{32})"\s+value="1"/i);
   if (!tokenMatch) throw new Error('MPOB 로그인 토큰을 찾을 수 없습니다 (사이트 구조 변경 가능성).');
@@ -199,7 +208,7 @@ async function login(jar: CookieJar): Promise<void> {
   body.set('return', returnVal);
   body.set(token, '1');
 
-  const loginRes = await fetch(`${MPOB_BASE}/index.php`, {
+  const { res: loginRes } = await mpobFetch(jar, `${MPOB_BASE}/index.php`, {
     method: 'POST',
     headers: {
       'User-Agent': UA,
@@ -210,31 +219,41 @@ async function login(jar: CookieJar): Promise<void> {
     body: body.toString(),
     redirect: 'manual',
   });
-  jar.absorb(loginRes);
 
   // 3) Follow the post-login redirect once to land authenticated and capture
   //    any rotated cookie.
   const loc = loginRes.headers.get('location');
   if (loc) {
-    const followRes = await fetch(loc.startsWith('http') ? loc : `${MPOB_BASE}${loc}`, {
+    const { html: followHtml } = await mpobFetch(jar, loc.startsWith('http') ? loc : `${MPOB_BASE}${loc}`, {
       headers: { 'User-Agent': UA, Cookie: jar.header() },
       redirect: 'manual',
     });
-    jar.absorb(followRes);
-    const followHtml = await followRes.text();
     if (/Username and password do not match|로그인|not match/i.test(followHtml) && !/Log\s*out|logout/i.test(followHtml)) {
       throw new Error('MPOB 로그인 실패: 아이디/비밀번호를 확인하세요.');
     }
   }
 }
 
+// fetch + 본문 읽기까지 FETCH_TIMEOUT_MS 안에 끝나야 한다 (MPOB 서버가 응답 도중 멈추는 경우 포함).
+async function mpobFetch(jar: CookieJar, url: string, init: RequestInit): Promise<{ res: Response; html: string }> {
+  try {
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    jar.absorb(res);
+    return { res, html: await res.text() };
+  } catch (err: any) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error(`MPOB 응답 지연 (${FETCH_TIMEOUT_MS / 1000}초 초과): ${url.replace(MPOB_BASE, '')}`);
+    }
+    throw err;
+  }
+}
+
 async function getText(jar: CookieJar, url: string): Promise<string> {
-  const res = await fetch(url, {
+  const { html } = await mpobFetch(jar, url, {
     headers: { 'User-Agent': UA, Cookie: jar.header() },
     redirect: 'follow',
   });
-  jar.absorb(res);
-  return res.text();
+  return html;
 }
 
 function extractReportVal(pageHtml: string): string | null {
@@ -363,49 +382,63 @@ export interface MpobScrapeResult {
   summary: { category: string; val: string | null; count: number; error?: string; url?: string; discovered?: boolean }[];
 }
 
+type PageResult = { records: MpobScrapedRecord[]; summary: MpobScrapeResult['summary'][number] };
+
+async function scrapeReportPage(jar: CookieJar, page: ReportPage, opts: ScrapeOptions): Promise<PageResult> {
+  try {
+    const pageHtml = await getText(jar, page.url);
+    const val = extractReportVal(pageHtml);
+    if (!val) {
+      return { records: [], summary: { category: page.category, val: null, count: 0, error: 'iframe report val을 찾지 못함', url: page.url, discovered: page.discovered } };
+    }
+    const reportHtml = await getText(jar, `${MPOB_BASE}/stat/web_report1.php?val=${val}`);
+    const year = parseInt(val.slice(0, 4), 10) || page.year;
+
+    let recs: MpobScrapedRecord[] = [];
+    if (page.category === 'stock' || page.category === 'production') {
+      recs = parseStockProduction(reportHtml, page.category, year);
+    } else if (page.category === 'closing_stock') {
+      recs = parseStockProduction(reportHtml, page.category, year, CLOSING_STOCK_ITEMS);
+    } else if (page.category === 'cpo_production') {
+      recs = parseStockProduction(reportHtml, page.category, year, CPO_PRODUCTION_ITEMS);
+    } else if (page.category === 'export_port') {
+      recs = parseExportPort(reportHtml, year);
+    } else if (page.category === 'export_product') {
+      recs = parseExportProduct(reportHtml, year);
+    }
+    return { records: recs, summary: { category: `${page.category}${opts.history ? ` ${page.year}` : ''}`, val, count: recs.length, url: page.url, discovered: page.discovered } };
+  } catch (err: any) {
+    return { records: [], summary: { category: page.category, val: null, count: 0, error: err.message, url: page.url, discovered: page.discovered } };
+  }
+}
+
 export async function scrapeMPOBData(opts: ScrapeOptions = {}): Promise<MpobScrapeResult> {
+  const deadline = Date.now() + SCRAPE_BUDGET_MS;
   const jar = new CookieJar();
   await login(jar);
 
-  // 연도별 기사 URL 탐색 (현재 연도 → 전년도 → 2026 고정 URL 순 / history 면 모든 연도)
-  const reportPages = await resolveReportPages(jar, new Date(), opts);
-
-  // 4개 카테고리를 병렬로 수집 (순차로 하면 Vercel 60초 제한 초과 → 504).
-  const perCategory = await Promise.all(
-    reportPages.map(async (page): Promise<{ records: MpobScrapedRecord[]; summary: MpobScrapeResult['summary'][number] }> => {
-      try {
-        const pageHtml = await getText(jar, page.url);
-        const val = extractReportVal(pageHtml);
-        if (!val) {
-          return { records: [], summary: { category: page.category, val: null, count: 0, error: 'iframe report val을 찾지 못함', url: page.url, discovered: page.discovered } };
-        }
-        const reportHtml = await getText(jar, `${MPOB_BASE}/stat/web_report1.php?val=${val}`);
-        const year = parseInt(val.slice(0, 4), 10) || page.year;
-
-        let recs: MpobScrapedRecord[] = [];
-        if (page.category === 'stock' || page.category === 'production') {
-          recs = parseStockProduction(reportHtml, page.category, year);
-        } else if (page.category === 'closing_stock') {
-          recs = parseStockProduction(reportHtml, page.category, year, CLOSING_STOCK_ITEMS);
-        } else if (page.category === 'cpo_production') {
-          recs = parseStockProduction(reportHtml, page.category, year, CPO_PRODUCTION_ITEMS);
-        } else if (page.category === 'export_port') {
-          recs = parseExportPort(reportHtml, year);
-        } else if (page.category === 'export_product') {
-          recs = parseExportProduct(reportHtml, year);
-        }
-        return { records: recs, summary: { category: `${page.category}${opts.history ? ` ${page.year}` : ''}`, val, count: recs.length, url: page.url, discovered: page.discovered } };
-      } catch (err: any) {
-        return { records: [], summary: { category: page.category, val: null, count: 0, error: err.message, url: page.url, discovered: page.discovered } };
-      }
+  // 보고서별로 '기사 URL 탐색 → 기사 페이지 → 리포트' 를 각자 병렬 진행.
+  // 탐색을 순차로 하면 로그인 + 섹션/연도 페이지 요청이 줄줄이 쌓여 Vercel 60초 제한 초과 → 504.
+  // 마감까지 못 끝낸 보고서는 시간 초과로 기록하고, 끝난 보고서만 저장한다.
+  const cache = new PageCache(jar);
+  const now = new Date();
+  const perReport = await Promise.all(
+    REPORT_DEFS.map((def) => {
+      const fail = (error: string): PageResult[] => [{ records: [], summary: { category: def.category, val: null, count: 0, error } }];
+      const run = resolveReportPages(def, cache, now, opts)
+        .then((pages) => Promise.all(pages.map((page) => scrapeReportPage(jar, page, opts))))
+        .catch((err: any) => fail(err.message));
+      return withDeadline(run, deadline, fail(`시간 초과 (${SCRAPE_BUDGET_MS / 1000}초 내 미완료)`));
     }),
   );
+  const perCategory = perReport.flat();
 
   const records: MpobScrapedRecord[] = perCategory.flatMap((p) => p.records);
   const summary: MpobScrapeResult['summary'] = perCategory.map((p) => p.summary);
 
   if (records.length === 0) {
-    throw new Error('MPOB에서 수집된 데이터가 없습니다. 로그인 또는 사이트 구조를 확인하세요.');
+    const reasons = [...new Set(summary.map((s) => s.error).filter(Boolean))].join(' / ');
+    throw new Error(`MPOB에서 수집된 데이터가 없습니다. 로그인 또는 사이트 구조를 확인하세요.${reasons ? ` (${reasons})` : ''}`);
   }
 
   return { records, summary };
