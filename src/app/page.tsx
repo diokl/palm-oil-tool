@@ -6652,8 +6652,13 @@ const MPOBTab = () => {
     setSyncing(true);
     try {
       const res = await fetch('/api/mpob/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ history }) });
-      const json = await res.json();
-      if (json.error) {
+      // 504(Vercel 60초 초과) 등은 JSON 이 아닌 본문이 와서 res.json() 이 실패 → 로그인 문제로 오인하지 않도록 따로 안내
+      const json = await res.json().catch(() => null);
+      if (!json) {
+        alert(res.status === 504
+          ? 'MPOB 자동 동기화 실패: 서버 처리 시간(60초) 초과 — MPOB 사이트 응답이 느립니다. 잠시 후 다시 시도하세요.'
+          : `MPOB 자동 동기화 실패: 서버 응답 오류 (HTTP ${res.status})`);
+      } else if (json.error) {
         alert(`MPOB 자동 동기화 실패: ${json.error}`);
       } else {
         alert(json.message || `동기화 완료: ${json.count}건`);
@@ -6661,7 +6666,7 @@ const MPOBTab = () => {
         fetchYears();
       }
     } catch (err) {
-      alert('MPOB 자동 동기화 실패 — 네트워크 또는 MPOB 로그인 정보를 확인하세요.');
+      alert('MPOB 자동 동기화 실패 — 서버에 연결하지 못했습니다. 네트워크를 확인하세요.');
     } finally {
       setSyncing(false);
     }
