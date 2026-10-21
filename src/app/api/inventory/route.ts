@@ -45,6 +45,7 @@ async function handleAutofill(product: string | null, year: number | null) {
 
     for (const p of purchases as any[]) {
       if (product && p.product !== product) continue;
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(p.shipment_month))) continue; // 선적월을 못 읽은 행은 제외 (NaN 제안 방지)
 
       // Calculate customs month = shipment_month + 1
       const [sy, sm] = (p.shipment_month as string).split('-').map(Number);
@@ -95,7 +96,8 @@ async function handleAutofill(product: string | null, year: number | null) {
         product: prod,
         year: parseInt(yr),
         month: parseInt(mn),
-        customs_volume: Math.round(val.customs_volume * 10) / 10,
+        // 구매 수량(MT) → 재고 통관수량 단위(kg). (이전: MT 그대로 → '자동 채우기' 가 1,000,000kg 을 1,000 으로 덮어씀)
+        customs_volume: Math.round(val.customs_volume * 1000),
         wavg_price: Math.round(wavg * 10) / 10,
         contract_price_text: uniquePrices.join(', '),
         shipment_month: `${shipYear}-${String(shipMonth).padStart(2, '0')}`,

@@ -205,7 +205,9 @@ export async function generateAlerts(persist = false): Promise<Alert[]> {
           recommended_shipment: null,
           current_price: null,
           box_range_zone: null,
-          message: `${product} 재고 ${basis} ${months}개월${basis === '선행 커버' ? ' (향후 월소요 기준)' : ''} -- 추가 구매 검토 필요`,
+          message: basis === '선행 커버'
+            ? `${product} 재고 선행 커버 ${months}개월 (향후 월소요 기준) -- 추가 구매 검토 필요`
+            : `${product} 재고회전 ${months}개월 -- 추가 구매 검토 필요`,
           action_taken: null,
           is_active: true,
         });

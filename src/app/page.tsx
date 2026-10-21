@@ -349,7 +349,16 @@ interface AlertsResponse {
 
 // ============ UTILITY ============
 
-const formatNumber = (num: number | null | undefined, decimals: number = 0) => {
+// 실패한 응답의 이유를 알림으로 보여준다 (서버의 { error } 우선, 없으면 상태코드)
+const alertFail = async (res: Response, what: string) => {
+  const j = await res.json().catch(() => ({} as any));
+  alert(`${what} 실패: ${j?.error || `HTTP ${res.status}`}`);
+};
+
+// 한국 날짜 'YYYY-MM-DD' (toISOString 은 UTC 라 오전 9시 전에는 전날이 된다)
+const localYmd = (d: Date = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const formatNumber =(num: number | null | undefined, decimals: number = 0) => {
   if (num === null || num === undefined) return '-';
   return new Intl.NumberFormat('ko-KR', {
     minimumFractionDigits: decimals,
@@ -444,9 +453,10 @@ const BoxRangeGauge = ({ data }: { data: BoxRangeDetail }) => {
 
   const zoneColors: Record<string, string> = {
     '전량구매': 'text-emerald-600 bg-emerald-50',
-    '적극매수': 'text-blue-600 bg-blue-50',
+    // 서버(lib/box-range) 구간명은 적극구매·최소구매 — 이전 키(적극매수·최소매수)와 달라 배지가 회색이었음
+    '적극구매': 'text-blue-600 bg-blue-50',
     '모니터링': 'text-amber-600 bg-amber-50',
-    '최소매수': 'text-orange-600 bg-orange-50',
+    '최소구매': 'text-orange-600 bg-orange-50',
     '구매대기': 'text-rose-600 bg-rose-50',
   };
   const zoneStyle = zoneColors[data.current_zone] || 'text-slate-600 bg-slate-50';
@@ -470,19 +480,19 @@ const BoxRangeGauge = ({ data }: { data: BoxRangeDetail }) => {
       <div className="grid grid-cols-4 gap-1 text-xs px-1">
         <div className="text-center">
           <span className="text-emerald-600 font-medium block">전량구매</span>
-          <span className="text-emerald-500 tabular-nums text-[10px]">~${formatPrice(zones.full_buy_upper)}</span>
+          <span className="text-emerald-500 tabular-nums text-[10px]">~{formatPrice(zones.full_buy_upper)}</span>
         </div>
         <div className="text-center">
-          <span className="text-blue-600 font-medium block">적극매수</span>
-          <span className="text-blue-500 tabular-nums text-[10px]">~${formatPrice(zones.active_buy_upper)}</span>
+          <span className="text-blue-600 font-medium block">적극구매</span>
+          <span className="text-blue-500 tabular-nums text-[10px]">~{formatPrice(zones.active_buy_upper)}</span>
         </div>
         <div className="text-center">
           <span className="text-amber-600 font-medium block">모니터링</span>
-          <span className="text-amber-500 tabular-nums text-[10px]">~${formatPrice(zones.monitoring_upper)}</span>
+          <span className="text-amber-500 tabular-nums text-[10px]">~{formatPrice(zones.monitoring_upper)}</span>
         </div>
         <div className="text-center">
-          <span className="text-rose-600 font-medium block">최소매수</span>
-          <span className="text-rose-500 tabular-nums text-[10px]">${formatPrice(zones.monitoring_upper)}~</span>
+          <span className="text-rose-600 font-medium block">최소구매</span>
+          <span className="text-rose-500 tabular-nums text-[10px]">{formatPrice(zones.monitoring_upper)}~</span>
         </div>
       </div>
 
@@ -901,13 +911,16 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
     }
   };
 
-  // Set initial selected month from box_ranges (only if no saved preference)
+  // 선택 월물이 지금 활성 목록에 없으면(만료) 저장값 → 첫 월물로 교체. 데이터가 바뀔 때마다 확인.
+  // (이전: 저장된 월물이 있으면 검사하지 않아, 만료된 9월물 게이지가 다음 달에도 계속 표시됨)
   useEffect(() => {
-    if (data?.box_ranges?.length && !selectedBoxMonth) {
-      const saved = localStorage.getItem('dashboard_box_month');
-      const validSaved = saved && data.box_ranges.some(b => b.contract_month === saved);
-      setSelectedBoxMonth(validSaved ? saved : data.box_ranges[0].contract_month);
-    }
+    const list = data?.box_ranges;
+    if (!list?.length) return;
+    if (selectedBoxMonth && list.some(b => b.contract_month === selectedBoxMonth)) return;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('dashboard_box_month'); } catch {}
+    const validSaved = saved && list.some(b => b.contract_month === saved);
+    setSelectedBoxMonth(validSaved ? saved! : list[0].contract_month);
   }, [data?.box_ranges]);
 
   // Save selection & fetch box detail when selected month changes
@@ -917,8 +930,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
     setBoxDetail(null);
     fetch(`/api/box-range?contract_month=${selectedBoxMonth}`)
       .then(r => r.json())
-      .then(d => { if (d && !d.error) setBoxDetail(d); })
-      .catch(() => {});
+      // 오류(데이터 부족 등)면 빈 객체 → 게이지가 '박스권 데이터를 불러올 수 없습니다' 안내 (이전: 로딩 표시가 계속됨)
+      .then(d => setBoxDetail(d && !d.error ? d : ({} as BoxRangeDetail)))
+      .catch(() => setBoxDetail({} as BoxRangeDetail));
   }, [selectedBoxMonth]);
 
   const selectedBoxRange = data?.box_ranges?.find(b => b.contract_month === selectedBoxMonth) || data?.box_ranges?.[0];
@@ -935,7 +949,8 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
 
   if (!data) return <div className="text-slate-500 p-8 text-center">데이터를 불러오는 중입니다...</div>;
 
-  const latestFCPO = data.fcpo_latest?.find(f => f.contract_month === '2026-04') || data.fcpo_latest?.[0];
+  // 근월물 = 이번 달 이후 첫 월물 (이전: '2026-04' 고정 — 만료 후엔 우연히 [0] 으로 대체되고 있었음)
+  const latestFCPO = data.fcpo_latest?.find(f => f.contract_month >= localYmd().slice(0, 7)) || data.fcpo_latest?.[0];
   const rbd = data.inventory_summary?.find((x) => x.product === 'RBD');
   const rspo = data.inventory_summary?.find((x) => x.product === 'RSPO');
   const managed = data.inventory_summary?.find((x) => x.product === 'MANAGED');
@@ -996,8 +1011,9 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
       )}
 
       {/* Alerts */}
-      {data.alerts?.filter(a => a.alert_level !== 'normal').map((alert, idx) => (
-        <AlertBanner key={idx} alert={alert}
+      {/* key 는 알림 내용 기준 — 순번이면 폴링 후 목록이 바뀔 때 닫은 상태가 다른(긴급) 알림으로 옮겨감 */}
+      {data.alerts?.filter(a => a.alert_level !== 'normal').map((alert) => (
+        <AlertBanner key={`${alert.product}-${alert.alert_level}-${alert.depletion_month ?? ''}-${alert.message ?? ''}`} alert={alert}
           onAction={() => onNavigate?.(alert.product === 'RBD' || alert.product === 'RSPO' ? 'inventory' : 'purchases')}
         />
       ))}
@@ -1042,7 +1058,7 @@ const DashboardTab = ({ data, loading, onNavigate }: { data: DashboardData | nul
 
       {/* 박스권 게이지 — 가로 전체폭 */}
       <div>
-        {boxDetail?.zones ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
+        {boxDetail ? <BoxRangeGauge data={boxDetail} /> : <Shimmer className="h-80" />}
       </div>
 
       {/* 월물 곡선은 대시보드에서 숨김 (FCPO 탭에서만 표시) — 사용자 요청 */}
@@ -1624,8 +1640,14 @@ const BacktestPanel = () => {
   const [bt, setBt] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    // 제품·시작월을 바꾸면 이전 요청은 무시하고, 실패하면 이전 제품 결과를 지운다 (이전: 다른 제품 결과가 남음)
+    let stale = false;
     setLoading(true);
-    fetch(`/api/backtest?product=${product}&from=${from}`).then(r => r.json()).then(j => { if (!j.error) setBt(j); }).catch(e => console.error('backtest failed', e)).finally(() => setLoading(false));
+    fetch(`/api/backtest?product=${product}&from=${from}`).then(r => r.json())
+      .then(j => { if (!stale) setBt(j.error ? null : j); })
+      .catch(e => { console.error('backtest failed', e); if (!stale) setBt(null); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [product, from]);
 
   const LABEL: Record<string, string> = { forward_3m: '3개월 선구매', split_3: '3분할(월초)', window_avg: '기간 평균', last_day: '최대 지연', box_range: '박스권 적극구매', box_full: '박스권 전량구매', spot_month: '당월 시황', best: '최저(사후)', worst: '최고(사후)', actual: '실제 계약' };
@@ -2021,8 +2043,9 @@ const FCPOTab = () => {
       // 2024년 이후 계약월 전체 표시 (2024-01 ~ 2026-12)
       const availableMonths = months.filter((m: string) => m >= '2024-01');
       setContractMonths(availableMonths);
-      // 기본 선택: 2026년 전체 월 (1~12월)
-      const defaultSelected = availableMonths.filter((m: string) => m >= '2026-01' && m <= '2026-12');
+      // 기본 선택: 이번 달부터 12개 월물 (이전: 2026년 1~12월 고정 → 만료 월물 위주, 2027년 활성 월물 제외)
+      const curYm = localYmd().slice(0, 7);
+      const defaultSelected = availableMonths.filter((m: string) => m >= curYm).slice(0, 12);
       setSelectedMonths(defaultSelected.length > 0 ? defaultSelected : availableMonths.slice(-6));
     } catch (error) {
       console.error('Failed to fetch FCPO data:', error);
@@ -2091,8 +2114,8 @@ const FCPOTab = () => {
       setBmdResult(null);
       fetchFCPOData();
       setTimeout(() => setBmdMessage(''), 3000);
-    } catch {
-      setBmdMessage('저장 중 오류 발생');
+    } catch (e: any) {
+      setBmdMessage(`저장 중 오류 발생: ${e?.message ?? ''}`);
     } finally {
       setBmdSaving(false);
     }
@@ -2126,7 +2149,7 @@ const FCPOTab = () => {
     const exchangeRate = result.exchange_rate;
     let saved = 0;
     for (const item of (result.rbd_palm_oil || [])) {
-      await fetch('/api/fcpo', {
+      const res = await fetch('/api/fcpo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2138,6 +2161,11 @@ const FCPOTab = () => {
           source: 'bmd_pdf_rbd',
         }),
       });
+      // 실패하면 예외 → 호출부의 '저장 중 오류' 로 (이전: 500 이어도 저장 건수로 세어 'N건 저장 완료' 표시)
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({} as any));
+        throw new Error(`${item.contract_month} 저장 실패: ${j?.error || res.status} (앞의 ${saved}건은 저장됨)`);
+      }
       saved++;
     }
     return saved;
@@ -3125,11 +3153,17 @@ const InventoryTab = () => {
 
   useEffect(() => { fetchInventory(); fetchAutofill(); }, [subTab]);
 
+  // 하위 탭을 빨리 바꿀 때 늦게 도착한 이전 탭 응답이 현재 탭을 덮어쓰지 않게 (이전: RSPO 2026 표에 RBD 행이 보이고 편집이 RBD 행으로 감)
+  const tabRef = useRef(subTab);
+  tabRef.current = subTab;
+
   const fetchInventory = async (silent = false) => {
+    const tab = subTab;
     if (!silent) setLoading(true);
     try {
       const res = await fetch(`/api/inventory?product=${currentTab.product}&year=${currentTab.year}`);
       const json: InventoryResponse = await res.json();
+      if (tabRef.current !== tab) return;
       setInventoryData(json.data || []);
     } catch (error) {
       console.error('Failed to fetch inventory:', error);
@@ -3139,9 +3173,11 @@ const InventoryTab = () => {
   };
 
   const fetchAutofill = async () => {
+    const tab = subTab;
     try {
       const res = await fetch(`/api/inventory?action=autofill&product=${currentTab.product}&year=${currentTab.year}`);
       const json = await res.json();
+      if (tabRef.current !== tab) return;
       setAutofillData(json.suggestions || []);
     } catch (e) {
       console.error('Failed to fetch autofill:', e);
@@ -3227,6 +3263,10 @@ const InventoryTab = () => {
         const json = await res.json();
         // Apply server truth (corrects any rounding differences)
         if (json.data) setInventoryData(json.data);
+      } else {
+        // 서버가 거부·실패하면 화면의 낙관적 값을 되돌린다 (이전: 저장 안 된 값이 화면에 남음)
+        await alertFail(res, '재고 저장');
+        fetchInventory(true);
       }
     } catch (error) {
       console.error('Failed to update inventory:', error);
@@ -3247,6 +3287,9 @@ const InventoryTab = () => {
       if (res.ok) {
         const json = await res.json();
         if (json.data) setInventoryData(json.data);
+      } else {
+        await alertFail(res, '재고 저장');
+        fetchInventory(true);
       }
     } catch (error) {
       console.error('Failed to update inventory:', error);
@@ -3502,9 +3545,11 @@ const InventoryTab = () => {
 
 const BoxRangeTab = () => {
   const [contractMonth, setContractMonth] = useState<string>(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('boxrange_contract_month') || '2026-04';
-    return '2026-04';
+    // 저장된 월물이 없거나 만료됐으면 월물 목록을 불러온 뒤 근월물로 맞춘다 (이전: '2026-04' 고정 기본값)
+    try { if (typeof window !== 'undefined') return localStorage.getItem('boxrange_contract_month') || ''; } catch {}
+    return '';
   });
+  const boxReqRef = useRef(0);
   const [asOfDate, setAsOfDate] = useState<string>('');
   const [mode, setMode] = useState<'일반' | '전쟁이슈'>(() => {
     if (typeof window !== 'undefined') {
@@ -3523,7 +3568,8 @@ const BoxRangeTab = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('boxrange_contract_month', contractMonth);
+    if (!contractMonth) return;
+    try { localStorage.setItem('boxrange_contract_month', contractMonth); } catch {}
     fetchAvailableDates();
     setAsOfDate(''); // reset date when month changes
   }, [contractMonth]);
@@ -3537,6 +3583,9 @@ const BoxRangeTab = () => {
   }, [contractMonth, asOfDate, mode]);
 
   const fetchBoxRange = async () => {
+    if (!contractMonth) return;
+    // 월물을 바꾸면 (새 월물+옛 기준일), (새 월물+기준일 없음) 두 요청이 나가는데, 늦게 끝난 쪽이 이기면 옛 기준일 결과가 보인다 → 마지막 요청만 반영
+    const req = ++boxReqRef.current;
     setLoading(true);
     setBoxRangeData(null);
     try {
@@ -3544,6 +3593,7 @@ const BoxRangeTab = () => {
       if (asOfDate) url += `&as_of_date=${asOfDate}`;
       const res = await fetch(url);
       const json = await res.json();
+      if (req !== boxReqRef.current) return;
       if (json && json.zones && !json.error) {
         setBoxRangeData(json as BoxRangeDetail);
       } else {
@@ -3553,7 +3603,7 @@ const BoxRangeTab = () => {
       console.error('Failed to fetch box range:', error);
       setBoxRangeData(null);
     } finally {
-      setLoading(false);
+      if (req === boxReqRef.current) setLoading(false);
     }
   };
 
@@ -3561,8 +3611,11 @@ const BoxRangeTab = () => {
     try {
       const res = await fetch('/api/fcpo');
       const json: FCPOData = await res.json();
-      const recentMonths = (json.contract_months || []).filter((m: string) => m >= '2026-01');
+      // 이번 달 이후(활성) 월물만 (이전: 2026-01 이후 전부 — 만료 월물 포함)
+      const curYm = localYmd().slice(0, 7);
+      const recentMonths = (json.contract_months || []).filter((m: string) => m >= curYm);
       setMonths(recentMonths);
+      setContractMonth(prev => (prev && recentMonths.includes(prev) ? prev : recentMonths[0] || prev));
     } catch (error) {
       console.error('Failed to fetch months:', error);
     }
@@ -3914,11 +3967,15 @@ const PurchasesTab = () => {
   };
 
   const handleSeed = async () => {
+    // 구매이력 전체를 지우고 초기 데이터로 바꾸는 작업 — 확인 문구를 직접 입력해야 실행
+    // (이전: '+ 구매 추가' 옆 버튼 한 번에 확인 없이 실행 → 스펙·프리미엄·최근 계약이 모두 사라짐)
+    const typed = window.prompt('구매이력 전체가 삭제되고 초기 데이터(2026-05 선적까지)로 바뀝니다. 되돌릴 수 없습니다.\n계속하려면 "초기화" 라고 입력하세요.');
+    if (typed !== '초기화') { if (typed !== null) setSeedMsg('입력이 달라 취소했습니다'); return; }
     setSeeding(true); setSeedMsg(null);
     try {
-      const res = await fetch('/api/purchases/seed', { method: 'POST' });
-      const json = await res.json();
-      setSeedMsg(json.message || 'Seed 완료');
+      const res = await fetch('/api/purchases/seed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: 'DELETE_ALL_PURCHASES' }) });
+      const json = await res.json().catch(() => ({}));
+      setSeedMsg(res.ok ? (json.message || 'Seed 완료') : `Seed 실패: ${json.error || res.status}`);
       fetchRaw(); fetchPrebuy();
     } catch { setSeedMsg('Seed 실패'); }
     finally { setSeeding(false); }
@@ -3985,12 +4042,15 @@ const PurchasesTab = () => {
       };
       payload.product = productForSpec(form.spec);
 
+      let res: Response;
       if (formMode === 'edit' && editId) {
         payload.id = editId;
-        await fetch('/api/purchases', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        res = await fetch('/api/purchases', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       } else {
-        await fetch('/api/purchases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        res = await fetch('/api/purchases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       }
+      // 실패하면 폼을 닫지 않고 이유를 알린다 (이전: 400/500 이어도 폼이 닫혀 입력이 사라짐)
+      if (!res.ok) { await alertFail(res, '구매 저장'); return; }
       setShowForm(false);
       setForm(emptyPurchaseForm);
       fetchRaw(); fetchPrebuy();
@@ -4003,7 +4063,8 @@ const PurchasesTab = () => {
 
   const handleDelete = async (id: number) => {
     try {
-      await fetch(`/api/purchases?id=${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/purchases?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) { await alertFail(res, '구매 삭제'); return; }
       setDeleteConfirm(null);
       fetchRaw(); fetchPrebuy();
     } catch (error) {
@@ -4087,7 +4148,8 @@ const PurchasesTab = () => {
     setBulkLoading(true); setBulkMsg(null);
     let saved = 0, skipped = 0, errored = 0;
     const errMsgs: string[] = [];
-    for (const r of pdfRecords) {
+    const savedIdx = new Set<number>();
+    for (const [idx, r] of pdfRecords.entries()) {
       if (!r.product || !r.shipment_month || !r.unit_price || !r.qty_mt) { skipped++; continue; }
       // 계약일을 notes 에 합쳐 보존 (purchases 에 contract_date 컬럼 없음)
       const notes = [r.notes, r.contract_date ? `계약일:${r.contract_date}` : '', r.payment_terms ? `결제:${r.payment_terms}` : '']
@@ -4099,7 +4161,8 @@ const PurchasesTab = () => {
         supplier: r.supplier,
         unit_price: Number(r.unit_price),
         qty_mt: Number(r.qty_mt),
-        amount_usd: r.amount_usd ?? Number(r.unit_price) * Number(r.qty_mt),
+        // 금액은 저장 시점의 단가 × 수량 (이전: 파싱 때 금액을 써서 미리보기에서 단가·수량을 고쳐도 옛 금액이 저장됨)
+        amount_usd: Number(r.unit_price) * Number(r.qty_mt),
         incoterms: r.incoterms,
         contract_number: r.contract_number,
         notes,
@@ -4112,7 +4175,7 @@ const PurchasesTab = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        if (res.ok) { saved++; }
+        if (res.ok) { saved++; savedIdx.add(idx); }
         else { errored++; const j = await res.json().catch(() => ({})); errMsgs.push(`${r.source_file}: ${j.error || res.status}`); }
       } catch (e: any) { errored++; errMsgs.push(`${r.source_file}: ${e.message}`); }
     }
@@ -4121,7 +4184,7 @@ const PurchasesTab = () => {
     if (errored) parts.push(`${errored}건 오류`);
     setBulkMsg(parts.join(', ') + (errMsgs.length ? ` — ${errMsgs[0]}` : '') + '!');
     if (saved > 0) {
-      setPdfRecords(prev => prev.filter(r => !r.product || !r.shipment_month || !r.unit_price || !r.qty_mt)); // 저장된 건 제거, 누락건만 남김
+      setPdfRecords(prev => prev.filter((_, i) => !savedIdx.has(i))); // 저장된 건만 제거 — 누락·오류 건은 남겨 다시 저장 가능 (이전: 오류 건도 사라짐)
       fetchRaw(); fetchPrebuy();
     }
     setBulkLoading(false);
@@ -4136,11 +4199,12 @@ const PurchasesTab = () => {
     if (!marketInput) return;
     setSavingMarket(true);
     try {
-      await fetch('/api/purchases', {
+      const res = await fetch('/api/purchases', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update_purchase_market_price', id: purchaseId, market_price_usd: parseFloat(marketInput) }),
       });
+      if (!res.ok) { await alertFail(res, '시황가 저장'); return; }
       setEditingMarketId(null);
       fetchPrebuy();
     } catch (error) {
@@ -4155,11 +4219,12 @@ const PurchasesTab = () => {
     if (!marketInput) return;
     setSavingMarket(true);
     try {
-      await fetch('/api/purchases', {
+      const res = await fetch('/api/purchases', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update_month_market_price', shipment_month: shipmentMonth, product: product || null, market_price_usd: parseFloat(marketInput) }),
       });
+      if (!res.ok) { await alertFail(res, '월 시황가 저장'); return; }
       setEditingMarketId(null);
       fetchPrebuy();
     } catch (error) {
@@ -4170,9 +4235,10 @@ const PurchasesTab = () => {
   };
 
   // 시황가 자동 매칭: 제안값 조회
-  const loadMarketMatch = async () => {
+  // keepMsg: 적용 직후 다시 불러올 때 결과 메시지를 지우지 않음 (이전: 적용 결과·실패 메시지가 바로 사라짐)
+  const loadMarketMatch = async (keepMsg = false) => {
     setMatchLoading(true);
-    setMatchMsg(null);
+    if (!keepMsg) setMatchMsg(null);
     try {
       const res = await fetch('/api/purchases/market-match');
       const json = await res.json();
@@ -4203,7 +4269,7 @@ const PurchasesTab = () => {
       setMatchMsg('적용 중 오류가 발생했습니다.');
     } finally {
       setMatchLoading(false);
-      loadMarketMatch();
+      loadMarketMatch(true);
     }
   };
 
@@ -4212,11 +4278,12 @@ const PurchasesTab = () => {
     if (!exRateInput) return;
     setSavingMarket(true);
     try {
-      await fetch('/api/purchases', {
+      const res = await fetch('/api/purchases', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update_purchase_exchange_rate', id: purchaseId, exchange_rate: parseFloat(exRateInput) }),
       });
+      if (!res.ok) { await alertFail(res, '환율 저장'); return; }
       setEditingExRateId(null);
       fetchPrebuy();
     } catch (error) {
@@ -4227,6 +4294,7 @@ const PurchasesTab = () => {
   };
 
   const setField = (key: string, val: string) => setForm(prev => ({ ...prev, [key]: val }));
+  // 단가·수량을 바꾸면 금액은 비워 저장 때 단가 × 수량으로 다시 계산 (이전: 수정 폼이 옛 금액을 그대로 저장 → 가중평균가 왜곡)
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -4450,11 +4518,11 @@ const PurchasesTab = () => {
                 </div>
                 <div>
                   <label className="text-xs text-slate-500 mb-1 block">단가 ($/MT) *</label>
-                  <input type="number" step="0.1" value={form.unit_price} onChange={(e) => setField('unit_price', e.target.value)} placeholder="1010.0" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                  <input type="number" step="0.1" value={form.unit_price} onChange={(e) => { setField('unit_price', e.target.value); setField('amount_usd', ''); }} placeholder="1010.0" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
                 </div>
                 <div>
                   <label className="text-xs text-slate-500 mb-1 block">수량 (MT) *</label>
-                  <input type="number" step="0.1" value={form.qty_mt} onChange={(e) => setField('qty_mt', e.target.value)} placeholder="500" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                  <input type="number" step="0.1" value={form.qty_mt} onChange={(e) => { setField('qty_mt', e.target.value); setField('amount_usd', ''); }} placeholder="500" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
                 </div>
                 <div>
                   <label className="text-xs text-slate-500 mb-1 block">금액 (USD)</label>
@@ -4644,6 +4712,10 @@ const PurchasesTab = () => {
         const managedSum = sumUp(managedRows);
         const managedRspoSum = sumUp(managedRspoRows);
         const totalSum = sumUp(combinedRows);
+        // 제품별 탭(총 효과 외)의 합계·이름 — 관리팜유 RPO/RSPO 탭도 같은 화면을 쓴다
+        // (이전: 화면 분기가 RBD·RSPO 만 있어 관리팜유 두 탭은 각주만 보이고 비어 있었음)
+        const viewSum = prebuyView === 'rbd' ? rbdSum : prebuyView === 'rspo' ? rspoSum : prebuyView === 'managed' ? managedSum : managedRspoSum;
+        const viewLabel = prebuyView === 'rbd' ? 'RBD' : prebuyView === 'rspo' ? 'RSPO(MB)' : prebuyView === 'managed' ? '관리팜유 RPO' : '관리팜유 RSPO';
 
         // Helper: color based on USD effect (positive = 절감)
         const eColor = (usd: number) => usd > 0 ? 'text-emerald-600' : usd < 0 ? 'text-rose-500' : 'text-slate-400';
@@ -4674,8 +4746,8 @@ const PurchasesTab = () => {
                       <button onClick={() => handlePurchaseMarketPriceSave(p.id)} disabled={savingMarket} className="text-blue-600 text-[9px] font-medium">{savingMarket ? '...' : '저장'}</button>
                     </div>
                   ) : (
-                    <span className="cursor-pointer text-blue-600 hover:underline"
-                      onClick={() => { setEditingMarketId(p.id); setEditingExRateId(null); setMarketInput(p.market_price_usd?.toString() || ''); }}>
+                    <span className={`text-blue-600 ${canWrite ? 'cursor-pointer hover:underline' : ''}`}
+                      onClick={() => { if (!canWrite) return; setEditingMarketId(p.id); setEditingExRateId(null); setMarketInput(p.market_price_usd?.toString() || ''); }}>
                       {p.market_price_usd != null ? `$${formatNumber(p.market_price_usd, 2)}` : <span className="text-slate-300 italic">미입력</span>}
                     </span>
                   )}
@@ -4690,8 +4762,8 @@ const PurchasesTab = () => {
                       <button onClick={() => handlePurchaseExRateSave(p.id)} disabled={savingMarket} className="text-amber-600 text-[9px] font-medium">{savingMarket ? '...' : '저장'}</button>
                     </div>
                   ) : (
-                    <span className="cursor-pointer text-amber-600 hover:underline"
-                      onClick={() => { setEditingExRateId(p.id); setEditingMarketId(null); setExRateInput(p.exchange_rate?.toString() || '1450'); }}>
+                    <span className={`text-amber-600 ${canWrite ? 'cursor-pointer hover:underline' : ''}`}
+                      onClick={() => { if (!canWrite) return; setEditingExRateId(p.id); setEditingMarketId(null); setExRateInput(p.exchange_rate?.toString() || '1450'); }}>
                       {p.exchange_rate?.toLocaleString() || '1,450'}
                     </span>
                   )}
@@ -4994,24 +5066,21 @@ const PurchasesTab = () => {
           )}
 
           {/* ===== RBD / RSPO 개별 탭 ===== */}
-          {(prebuyView === 'rbd' || prebuyView === 'rspo') && (
+          {prebuyView !== 'total' && (
             <>
               <div className="grid grid-cols-3 gap-3">
                 <MetricCard
-                  label={`${prebuyView === 'rbd' ? 'RBD' : 'RSPO(MB)'} 선구매 효과`}
-                  value={formatKRW(prebuyView === 'rbd' ? rbdSum.effectKrw : rspoSum.effectKrw)}
-                  accent={(prebuyView === 'rbd' ? rbdSum.effectUsd : rspoSum.effectUsd) > 0 ? 'text-emerald-600' : 'text-rose-500'}
+                  label={`${viewLabel} 선구매 효과`}
+                  value={formatKRW(viewSum.effectKrw)}
+                  accent={viewSum.effectUsd > 0 ? 'text-emerald-600' : 'text-rose-500'}
                 />
-                <MetricCard label="수량" value={`${formatNumber(prebuyView === 'rbd' ? rbdSum.qty : rspoSum.qty, 0)} MT`} />
-                <MetricCard label="성공률" value={(() => {
-                  const s = prebuyView === 'rbd' ? rbdSum : rspoSum;
-                  return s.months > 0 ? `${Math.round(s.success / s.months * 100)}%` : '-';
-                })()} accent="text-emerald-600" />
+                <MetricCard label="수량" value={`${formatNumber(viewSum.qty, 0)} MT`} />
+                <MetricCard label="성공률" value={viewSum.months > 0 ? `${Math.round(viewSum.success / viewSum.months * 100)}%` : '-'} accent="text-emerald-600" />
               </div>
 
               {periodRows.length === 0 ? (
                 <div className="card p-8 text-center">
-                  <p className="text-slate-500 text-sm">{prebuyView === 'rbd' ? 'RBD' : 'RSPO(MB)'} 데이터가 없습니다</p>
+                  <p className="text-slate-500 text-sm">{viewLabel} 데이터가 없습니다</p>
                 </div>
               ) : (
                 <div className="card overflow-hidden">
@@ -5331,6 +5400,8 @@ const NewsTab = () => {
   const [oneClickMsg, setOneClickMsg] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null);
   const [showBookmarklet, setShowBookmarklet] = useState(false);
   const [catFilter, setCatFilter] = useState<string>('전체');
+  // 분류 필터를 바꾸면 선택 해제 — 숨겨진 기사가 선택된 채로 삭제되지 않게
+  useEffect(() => { setSelectedIds(new Set()); }, [catFilter]);
 
   // Detail/Delete
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -5403,11 +5474,14 @@ const NewsTab = () => {
     });
   };
 
+  // 전체 선택 = 지금 보이는(분류 필터 적용) 기사만. (이전: 숨겨진 다른 분류 기사까지 선택돼 '선택 삭제' 로 함께 지워짐)
+  const visibleNews = catFilter === '전체' ? newsData : newsData.filter(n => (n.category || '기타') === catFilter);
+  const allVisibleSelected = visibleNews.length > 0 && visibleNews.every(n => selectedIds.has(n.id));
   const toggleSelectAll = () => {
-    if (selectedIds.size === newsData.length) {
+    if (allVisibleSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(newsData.map(n => n.id)));
+      setSelectedIds(new Set(visibleNews.map(n => n.id)));
     }
   };
 
@@ -5421,7 +5495,7 @@ const NewsTab = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          date: newNews.date || new Date().toISOString().slice(0, 10),
+          date: newNews.date || localYmd(), // 한국 날짜 (toISOString 은 UTC 라 오전 9시 전엔 전날)
           content: newNews.content,
           auto_analyze: true,
           created_by: 'user',
@@ -5762,7 +5836,7 @@ const NewsTab = () => {
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={selectedIds.size === newsData.length && newsData.length > 0}
+                checked={allVisibleSelected}
                 onChange={toggleSelectAll}
                 className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
               />
@@ -5770,7 +5844,7 @@ const NewsTab = () => {
                 {selectedIds.size > 0 ? `${selectedIds.size}개 선택됨` : '전체 선택'}
               </span>
             </label>
-            {selectedIds.size > 0 && (
+            {canWrite && selectedIds.size > 0 && (
               <div className="flex items-center gap-2">
                 {bulkDeleteConfirm ? (
                   <>
@@ -5886,7 +5960,7 @@ const NewsTab = () => {
                                     <button onClick={() => handleDeleteNews(news.id)} className="px-3 py-1 bg-rose-500 text-white text-xs rounded-lg hover:bg-rose-600">삭제</button>
                                     <button onClick={() => setDeleteConfirm(null)} className="px-3 py-1 bg-slate-200 text-slate-600 text-xs rounded-lg hover:bg-slate-300">취소</button>
                                   </div>
-                                ) : (
+                                ) : canWrite && (
                                   <button
                                     onClick={(e) => { e.stopPropagation(); setDeleteConfirm(news.id); }}
                                     className="px-3 py-1 text-xs text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
@@ -5955,7 +6029,7 @@ const AlertsTab = () => {
         <div className="card p-8 text-center text-slate-500 text-sm">활성 알림 없음</div>
       ) : (
         <div className="space-y-3">
-          {alertData.map((alert, idx) => <AlertBanner key={idx} alert={alert} />)}
+          {alertData.map((alert) => <AlertBanner key={`${alert.product}-${alert.alert_level}-${alert.depletion_month ?? ''}-${alert.message ?? ''}`} alert={alert} />)}
         </div>
       )}
     </div>
@@ -6245,8 +6319,11 @@ const DocVerifyTab = () => {
           </div>
 
           {/* Summary */}
-          <div className={`card p-5 border-l-4 ${verification.summary.includes('discrepanc') ? 'border-l-amber-400 bg-amber-50/40' : 'border-l-emerald-400 bg-emerald-50/40'}`}>
-            <h3 className="text-sm font-semibold text-slate-700 mb-2">검증 결과</h3>
+          <div className={`card p-5 border-l-4 ${
+            verification.verified === false ? 'border-l-rose-400 bg-rose-50/40'
+            : (verification.discrepancies?.length ?? 0) > 0 ? 'border-l-amber-400 bg-amber-50/40'
+            : 'border-l-emerald-400 bg-emerald-50/40'}`}>
+            <h3 className="text-sm font-semibold text-slate-700 mb-2">{verification.verified === false ? '검증 실패 — 결과를 신뢰할 수 없습니다' : '검증 결과'}</h3>
             <p className="text-sm text-slate-700">{verification.summary}</p>
           </div>
 
@@ -6317,10 +6394,18 @@ const UsdaPanel = () => {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // 품목 토글을 빨리 바꿔도 마지막 요청만 반영, 실패하면 이전 품목 표를 지움 (이전: 대두유 토글 아래 팜유 표가 남을 수 있었음)
+  const reqRef = useRef(0);
   const load = async (c = commodity) => {
+    const req = ++reqRef.current;
     setLoading(true);
-    try { const r = await fetch(`/api/usda?commodity=${c}`); const j = await r.json(); if (!j.error) setData(j); }
-    catch (e) { console.error('usda fetch failed', e); } finally { setLoading(false); }
+    try {
+      const r = await fetch(`/api/usda?commodity=${c}`); const j = await r.json();
+      if (req !== reqRef.current) return;
+      if (!j.error) setData(j); else { setData(null); setMsg(`조회 실패: ${j.error}`); }
+    }
+    catch (e) { console.error('usda fetch failed', e); if (req === reqRef.current) setData(null); }
+    finally { if (req === reqRef.current) setLoading(false); }
   };
   useEffect(() => { load(commodity); }, [commodity]);
   const sync = async () => {
@@ -6613,7 +6698,11 @@ const MPOBTab = () => {
     return Array.from(itemMap.values()).sort((a, b) => a.sort_order - b.sort_order);
   };
 
+  // 연도·하위 탭을 빨리 바꿀 때 늦게 도착한 이전 요청이 화면을 덮어쓰지 않게 마지막 요청만 반영
+  // (이전: 2025 선택 화면에 2026 수치가 보이고, 그 상태로 셀을 고치면 다른 연도의 RM 값이 함께 저장될 수 있었음)
+  const mpobReqRef = useRef(0);
   const fetchData = async () => {
+    const req = ++mpobReqRef.current;
     setLoading(true);
     try {
       const prevYear = year - 1;
@@ -6630,15 +6719,18 @@ const MPOBTab = () => {
         const prevData = allResults.find(r => r.cat === cat && r.year !== year)?.data || [];
         results[cat] = parseMpobRows(curData, prevData);
       }
+      if (req !== mpobReqRef.current) return;
       setData(results);
     } catch (err) {
       console.error('MPOB fetch error:', err);
     } finally {
-      setLoading(false);
+      if (req === mpobReqRef.current) setLoading(false);
     }
   };
 
   const handleSeed = async () => {
+    // 초기 데이터로 같은 연·월 값을 덮어쓴다 — 자동 수집한 최신 값이 옛 값으로 돌아갈 수 있어 확인
+    if (!window.confirm('MPOB 초기 데이터로 같은 연·월 값을 덮어씁니다. 자동 수집한 최신 값이 옛 값으로 바뀔 수 있습니다. 계속할까요?')) return;
     setSeeding(true);
     try {
       const res = await fetch('/api/mpob/seed', { method: 'POST' });
@@ -6731,17 +6823,11 @@ const MPOBTab = () => {
       const itemName = parts[0];
       for (let m = 1; m < parts.length && m <= 12; m++) {
         const raw = parts[m].replace(/,/g, '');
-        const val = raw === '' || raw === '-' ? null : parseFloat(raw);
-        if (val == null && raw !== '' && raw !== '-') continue;
-        records.push({
-          category: bulkCategory,
-          item_name: itemName,
-          year,
-          month: m,
-          value: val,
-          value_rm: null,
-          sort_order: 0,
-        });
+        if (raw === '' || raw === '-') continue; // 빈 칸은 기존 값 유지
+        const val = Number(raw);
+        if (!Number.isFinite(val)) continue; // 'n/a' 등 숫자 아닌 칸은 건너뜀 (이전: NaN 이 null 로 저장돼 기존 값을 지움)
+        // 값만 보낸다 — RM 금액·정렬 순서는 서버가 기존 값 유지 (이전: value_rm=null, sort_order=0 으로 덮어씀)
+        records.push({ category: bulkCategory, item_name: itemName, year, month: m, value: val });
       }
     }
     if (records.length === 0) { alert('파싱할 데이터가 없습니다.'); return; }
@@ -6751,6 +6837,7 @@ const MPOBTab = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ records }),
       });
+      if (!res.ok) { await alertFail(res, 'Bulk 업데이트'); return; } // (이전: 500 이어도 'N건 업데이트 완료')
       const json = await res.json();
       alert(`${json.count || records.length}건 업데이트 완료`);
       setBulkOpen(false);
@@ -7445,7 +7532,11 @@ export default function Home() {
   const fetchDashboardData = async () => {
     try {
       const res = await fetch('/api/dashboard');
+      // 세션이 만료되면 로그인 화면으로 (이전: { error:'Unauthorized' } 를 대시보드 데이터로 저장해 빈 화면으로 폴링 계속)
+      if (res.status === 401) { window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`; return; }
       const json: DashboardData = await res.json();
+      // 서버 오류 응답은 직전 데이터를 유지 (빈 화면으로 덮어쓰지 않음)
+      if (!res.ok || (json as any)?.error) { console.warn('dashboard fetch failed:', (json as any)?.error ?? res.status); return; }
       setDashboardData(json);
       setLastSyncTime(new Date().toLocaleTimeString('ko-KR'));
     } catch (error) {
